@@ -31,6 +31,20 @@ from source.Mask import checkIntersection, intersectMask
 
 import math
 
+# Qt's raster paint engine clamps painting coordinates to this value: anything a QPainter draws
+# beyond it is silently dropped, and QImage.scaled() leaves the excess black. Reading from,
+# cropping and displaying images larger than this works fine, which is why maps of any size can
+# be loaded and annotated while images that are *painted into* still have to respect the limit.
+QT_RASTER_COORD_LIMIT = 32767
+
+
+def exceedsPaintLimit(width, height):
+    """
+    True if an image of this size cannot be reliably painted into by a QPainter.
+    """
+    return width > QT_RASTER_COORD_LIMIT or height > QT_RASTER_COORD_LIMIT
+
+
 def clampCoords(x, y, W, H):
 
     if x < 0:

@@ -322,28 +322,51 @@ class QtImageViewerPlus(QtImageViewer):
         if channel.qimage is not None:
             img = channel.qimage
         else:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            img = channel.loadData(self.taglab_dir)
-            QApplication.restoreOverrideCursor()
+            img = self.loadChannelData(channel)
 
-        if img.isNull():
+        if img is None or img.isNull():
+            # the file is missing (or was moved): ask the user to point at it again
             (filename, filter) = QFileDialog.getOpenFileName(self, "Couldn't find the map, please select it:",
                                                                        QFileInfo(channel.filename).dir().path(),
-                                                                       "Image Files (*.png *.jpg *.jpeg)")
+                                                                       "Image Files (*.png *.jpg *.jpeg *.tif *.tiff)")
+            if not filename:
+                raise Exception("Could not load or find the image: " + channel.filename)
+
             dir = QDir(self.taglab_dir)
             channel.filename = dir.relativeFilePath(filename)
 
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            img = channel.loadData(self.taglab_dir)
-            QApplication.restoreOverrideCursor()
+            img = self.loadChannelData(channel)
 
-            if img.isNull():
+            if img is None or img.isNull():
                 raise Exception("Could not load or find the image: " + filename)
 
         if switch:
             self.setChannelImg(img, self.zoom_factor)
         else:
             self.setChannelImg(img)
+
+    def loadChannelData(self, channel):
+        """
+        Load the pixels of a channel, returning None if the file is simply not there.
+
+        Anything else (an unreadable file, an unsupported compression, a driver that GDAL was
+        built without) is reported as-is instead of being mistaken for a missing map: the two
+        used to be indistinguishable, and a decoding failure showed up as a "Couldn't find the
+        map" file dialog.
+        """
+
+        path = os.path.join(self.taglab_dir, channel.filename)
+        if not os.path.isfile(path) and not os.path.isfile(channel.filename):
+            return None
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            return channel.loadData(self.taglab_dir)
+        except Exception as e:
+            raise Exception("Could not read " + channel.filename + "\n\n" + str(e))
+        finally:
+            # without this the application would be stuck with the wait cursor after a failure
+            QApplication.restoreOverrideCursor()
 
     def setChannelImg(self, channel_img, zoomf=0.0):
         """

@@ -20,6 +20,7 @@
 from PyQt5.QtGui import QImage
 from PyQt5.QtGui import QImageReader
 import rasterio as rio
+from rasterio.windows import Window
 from source import genutils
 import numpy as np
 import os
@@ -33,6 +34,10 @@ class Channel(object):
         self.float_map = None         # map of 32-bit floating point (e.g. to store high precision depth values)
         self.nodata = None            # invalid value
 
+        # numpy buffer backing self.qimage for the RGB channel. QImage does NOT own this memory,
+        # so the array has to stay alive for as long as the QImage does.
+        self._pixel_buffer = None
+
     def loadData(self, taglab_dir):
         """
         Load the image data. The QImage is cached to speed up visualization.
@@ -41,15 +46,7 @@ class Channel(object):
         filename = os.path.join(taglab_dir, self.filename)
 
         if self.type == "RGB":
-
-            # reader = QImageReader(self.filename)
-            # self.qimage = reader.read()
-            # if self.qimage.isNull():
-            #     print(reader.errorString())
-            # self.qimage = self.qimage.convertToFormat(QImage.Format_RGB32)
-            img = rio.open(self.filename).read()
-            img = np.moveaxis(img, 0, -1)  # Since Rasterio is channel first shape=(c, h, w)
-            self.qimage = genutils.rgbToQImage(img)
+            self.qimage = self.loadRGB(filename)
 
         # typically the depth map is stored in a 32-bit Tiff
         if self.type == "DEM":
@@ -59,6 +56,65 @@ class Channel(object):
             self.qimage = genutils.floatmapToQImage(self.float_map, self.nodata)
 
         return self.qimage
+
+    def loadRGB(self, filename):
+        """
+        Read the RGB channel through rasterio/GDAL and wrap it into a QImage.
+
+        The pixels are decoded one horizontal stripe at a time, straight into the BGRA buffer
+        that QImage expects, so the only full-size allocation is the buffer itself: 4 bytes per
+        pixel, whatever the size of the map. The previous implementation read the whole
+        (c, h, w) array, transposed it, built a second array and then QImage.copy()'d it,
+        which peaked at about 12 bytes per pixel.
+        """
+
+        # rows decoded per iteration: keeps the temporary bounded (a few hundred MB at most)
+        # instead of proportional to the height of the map
+        STRIPE_ROWS = 1024
+
+        with rio.open(filename) as src:
+            w = src.width
+            h = src.height
+            count = src.count
+
+            if count < 1:
+                raise Exception("The image " + filename + " contains no band.")
+
+            # a 4th band (or a 2nd one next to a grey band) is the alpha channel
+            has_alpha = count == 4 or count == 2
+            image_format = QImage.Format_ARGB32 if has_alpha else QImage.Format_RGB32
+
+            # BGRA, which is the memory layout of both Format_RGB32 and Format_ARGB32
+            buffer = np.empty((h, w, 4), dtype=np.uint8)
+
+            color_bands = [1, 2, 3] if count >= 3 else [1]
+
+            for y in range(0, h, STRIPE_ROWS):
+                rows = min(STRIPE_ROWS, h - y)
+                window = Window(0, y, w, rows)
+                stripe = buffer[y:y + rows]
+
+                pixels = src.read(color_bands, window=window)
+
+                if count >= 3:
+                    stripe[:, :, 2] = pixels[0]
+                    stripe[:, :, 1] = pixels[1]
+                    stripe[:, :, 0] = pixels[2]
+                else:
+                    # single band: replicate it over R, G and B
+                    stripe[:, :, 0] = pixels[0]
+                    stripe[:, :, 1] = pixels[0]
+                    stripe[:, :, 2] = pixels[0]
+
+                if has_alpha:
+                    stripe[:, :, 3] = src.read(count, window=window)
+                else:
+                    stripe[:, :, 3] = 255
+
+        # keep a reference: QImage points at this memory instead of copying it
+        self._pixel_buffer = buffer
+
+        return QImage(buffer.data, w, h, w * 4, image_format)
 
     def save(self):
         return { "filename": self.filename, "type": self.type }

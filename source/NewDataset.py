@@ -564,6 +564,16 @@ class NewDataset(object):
 		w = self.ortho_image.width()
 		h = self.ortho_image.height()
 
+		# the blobs are rasterized with a QPainter, and Qt's raster engine drops everything it
+		# draws past 32767: on a larger map the labels would silently come out black instead
+		if genutils.exceedsPaintLimit(w, h):
+			raise Exception(
+				"The map is " + str(w) + "x" + str(h) + " pixels. Dataset export rasterizes the "
+				"labels with Qt, which cannot paint beyond " + str(genutils.QT_RASTER_COORD_LIMIT) +
+				" pixels, so the exported labels would be incomplete. Please define a working area "
+				"of at most " + str(genutils.QT_RASTER_COORD_LIMIT) + "x" +
+				str(genutils.QT_RASTER_COORD_LIMIT) + " pixels and export that instead.")
+
 		labelimg = QImage(w, h, QImage.Format_RGB32)
 		labelimg.fill(qRgb(0, 0, 0))
 

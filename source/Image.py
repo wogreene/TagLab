@@ -124,10 +124,10 @@ class Image(object):
                 raise Exception("Size of the images is not consistent! It is " + str(img.width) + "x" +
                                 str(img.height) + ", should have been: " + str(self.width) + "x" + str(self.height))
 
-        # check image size limits
-        if img.width > 32767 or img.height > 32767:
-            raise Exception(
-                "This map exceeds the image dimension handled by TagLab (the maximum size is 32767 x 32767).")
+        # NOTE: the old 32767 x 32767 limit came from Qt's raster paint engine, whose coordinates
+        # are clamped to 32767. That clamp only applies when *drawing into* an image; loading,
+        # cropping and displaying a larger map works, so no dimension check is enforced here.
+        # The practical limit is now memory: the map is held uncompressed at 4 bytes per pixel.
 
         if img.crs is not None:
             # this image contains georeference information

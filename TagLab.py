@@ -112,6 +112,11 @@ from source.Shape import Layer, Shape
 
 from source.Tools import Tools
 
+# Set to True to query the upstream repository for a newer version at startup.
+# This is a customized build, so the check is off by default: it only slows down
+# the startup and an upstream release must never block this fork from running.
+CHECK_FOR_UPDATES = False
+
 # training modules
 from models.coral_dataset import CoralsDataset
 import models.training as training
@@ -162,11 +167,10 @@ class TagLab(QMainWindow):
 
         current_version, need_to_update = self.checkNewVersion()
         if need_to_update:
-            print("--- THERE IS A NEW VERSION AVAILABLE! ---")
-            print("Please, launch update.py")
-            print("if updating from the 29/10/2024 version, also launch install.py")
-            print("-----------------------------------------")            
-            sys.exit(0)
+            print("--- A NEWER VERSION IS AVAILABLE UPSTREAM ---")
+            print("This is a customized build, so the update is not enforced.")
+            print("Run update.py manually if you want to pull the upstream version.")
+            print("--------------------------------------------")
 
         ##### DATA INITIALIZATION AND SETUP #####
 
@@ -827,6 +831,9 @@ class TagLab(QMainWindow):
         taglab_version_file = os.path.join(os.path.dirname(__file__), "TAGLAB_VERSION")
         f_off_version = open(taglab_version_file, "r")
         taglab_offline_version = f_off_version.read()
+
+        if not CHECK_FOR_UPDATES:
+            return taglab_offline_version, False
 
         #print('Raw link: ' + raw_link)
         try:
@@ -4293,9 +4300,16 @@ class TagLab(QMainWindow):
 
     def updateMapViewer(self):
         if self.mapviewer.isVisible():
+
+            # the viewer no longer keeps a full-resolution QPixmap of the map, so the thumbnail
+            # is built from the QImage instead (and there is nothing to show before a map is loaded)
+            if self.activeviewer is None or self.activeviewer.img_map is None:
+                return
+
             w = self.mapviewer.width()
             if self.activeviewer.thumb is None:
-                self.activeviewer.thumb = self.activeviewer.pixmap.scaled(w, w, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                thumb = self.activeviewer.img_map.scaled(w, w, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.activeviewer.thumb = QPixmap.fromImage(thumb)
             self.mapviewer.setPixmap(self.activeviewer.thumb)
             self.mapviewer.setOpacity(0.5)
 
@@ -5347,7 +5361,19 @@ class TagLab(QMainWindow):
 
             target_classes = training.createTargetClasses(self.activeviewer.annotations)
 
-            new_dataset.createLabelImage(self.project.labels)
+            try:
+                new_dataset.createLabelImage(self.project.labels)
+            except Exception as e:
+                QApplication.restoreOverrideCursor()
+                msgBox = QMessageBox()
+                msgBox.setWindowTitle(self.TAGLAB_VERSION)
+                msgBox.setText(str(e))
+                msgBox.exec()
+                self.deleteProgressBar()
+                self.deleteNewDatasetWidget()
+                self.disableAreaSelection()
+                return
+
             new_dataset.convertColorsToLabels(target_classes, self.project.labels)
             new_dataset.computeFrequencies(target_classes)
             target_pixel_size = self.newDatasetWidget.getTargetScale()

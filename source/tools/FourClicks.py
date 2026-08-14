@@ -79,7 +79,9 @@ class FourClicks(Tool):
         image_cropped = genutils.cropQImage(self.viewerplus.img_map, [top, left, w, h])
 
         fmt = image_cropped.format()
-        assert (fmt == QImage.Format_RGB32)
+        # an image with an alpha band is loaded as ARGB32; the code below only reads the B, G and
+        # R bytes, and both formats store them the same way, so either one is fine here
+        assert (fmt == QImage.Format_RGB32 or fmt == QImage.Format_ARGB32)
 
         arr = np.zeros((h, w, 3), dtype=np.uint8)
 

@@ -344,25 +344,40 @@ class MapClassifier(QObject):
             pkl.dump(working_area_scores, fileobject)
             fileobject.close()
 
-        qimglabel = QImage(W, H, QImage.Format_RGB32)
-        painter = QPainter(qimglabel)
+        # The tiles are copied into a numpy canvas instead of being painted with a QPainter:
+        # Qt's raster engine silently drops anything drawn past 32767, which a working area on a
+        # large orthomosaic exceeds. A plain memory copy has no such limit.
+        # The canvas is BGRA, i.e. the memory layout of QImage.Format_RGB32.
+        canvas = np.zeros((H, W, 4), dtype=np.uint8)
+        canvas[:, :, 3] = 255
 
         for r in range(tile_rows):
             for c in range(tile_cols):
                 tilename = str(r) + "_" + str(c) + ".png"
                 filename = os.path.join(self.temp_dir, tilename)
                 qimg = QImage(filename)
+                if qimg.isNull():
+                    continue
 
                 xoffset = c * AGGREGATION_WINDOW_SIZE
                 yoffset = r * AGGREGATION_WINDOW_SIZE
 
-                painter.drawImage(xoffset, yoffset, qimg)
+                tile = genutils.qimageToNumpyArray(qimg.convertToFormat(QImage.Format_RGB32))
 
-        # detach the qimglabel otherwise the Qt EXPLODES when memory is free
-        painter.end()
+                th = min(tile.shape[0], H - yoffset)
+                tw = min(tile.shape[1], W - xoffset)
+                if th <= 0 or tw <= 0:
+                    continue
+
+                target = canvas[yoffset:yoffset + th, xoffset:xoffset + tw]
+                target[:, :, 2] = tile[0:th, 0:tw, 0]
+                target[:, :, 1] = tile[0:th, 0:tw, 1]
+                target[:, :, 0] = tile[0:th, 0:tw, 2]
 
         # the classified area can exceed the working area
-        qimgworkingarea = qimglabel.copy(0, 0, self.wa_width, self.wa_height)
+        working_area = np.ascontiguousarray(canvas[0:self.wa_height, 0:self.wa_width])
+        qimgworkingarea = QImage(working_area.data, self.wa_width, self.wa_height,
+                                 self.wa_width * 4, QImage.Format_RGB32)
 
         labelfile = os.path.join(self.temp_dir, "labelmap.png")
         qimgworkingarea.save(labelfile)

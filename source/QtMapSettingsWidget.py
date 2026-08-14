@@ -20,7 +20,7 @@
 import os
 
 from PyQt5.QtCore import Qt, QSize, pyqtSlot, pyqtSignal
-from PyQt5.QtGui import QImage, QImageReader, QPixmap, QIcon, qRgb, qRed, qGreen, qBlue
+from PyQt5.QtGui import QImage, QPixmap, QIcon, qRgb, qRed, qGreen, qBlue
 from PyQt5.QtWidgets import QWidget, QMessageBox, QFileDialog, QComboBox, QSizePolicy, QLineEdit, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 from datetime import date
 from source import genutils
@@ -160,15 +160,6 @@ class QtMapSettingsWidget(QWidget):
         if not genutils.isValidDate(txt):
             msgBox = QMessageBox()
             msgBox.setText("Invalid date format. Please, enter the acquisition date as YYYY-MM-DD.")
-            msgBox.exec()
-            return
-
-        # TODO: redundat check, remove it ?
-        image_reader = QImageReader(rgb_filename)
-        size = image_reader.size()
-        if size.width() > 32767 or size.height() > 32767:
-            msgBox = QMessageBox()
-            msgBox.setText("The image is too large. TagLab is limited to 32767x32767 pixels.")
             msgBox.exec()
             return
 

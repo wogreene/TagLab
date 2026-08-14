@@ -1,12 +1,51 @@
 import os.path
 from PyQt5.QtCore import Qt, QPointF, QRectF, QFileInfo, QDir, pyqtSlot, pyqtSignal, QT_VERSION_STR
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPainterPath, QPen, QImageReader, QMouseEvent
-from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QFileDialog, QGraphicsPixmapItem
+from PyQt5.QtGui import QImage, QPainter, QPainterPath, QPen, QImageReader, QMouseEvent
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QFileDialog, QGraphicsItem
+
+
+class QGraphicsBigImageItem(QGraphicsItem):
+    """
+    Graphics item that paints a QImage directly, without an intermediate QPixmap.
+
+    QGraphicsPixmapItem would hold a second full-resolution copy of the map (4 bytes per pixel,
+    i.e. ~14 GB on a 60000x60000 orthomosaic on top of the 14 GB of the QImage itself).
+    Painting from the QImage keeps a single copy in memory. Only the exposed rectangle is
+    blitted on each repaint, so the cost per frame depends on the viewport, not on the map size.
+    """
+
+    def __init__(self, parent=None):
+        super(QGraphicsBigImageItem, self).__init__(parent)
+
+        # without this flag Qt reports the whole bounding rect as exposed, which on a large map
+        # would mean blitting billions of pixels per repaint
+        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+
+        self.image = QImage()
+
+    def setImage(self, image):
+        self.prepareGeometryChange()
+        self.image = image if image is not None else QImage()
+        self.update()
+
+    def boundingRect(self):
+        return QRectF(self.image.rect())
+
+    def paint(self, painter, option, widget=None):
+        if self.image.isNull():
+            return
+
+        exposed = option.exposedRect.intersected(QRectF(self.image.rect()))
+        if exposed.isEmpty():
+            return
+
+        painter.drawImage(exposed, self.image, exposed)
+
 
 class QtImageViewer(QGraphicsView):
     """
     Basic PyQt image viewer with pan and zoom capabilities.
-    The input image (it must be a QImage) is internally converted into a QPixmap.
+    The input image must be a QImage; it is painted directly, without being copied into a QPixmap.
     """
 
     viewUpdated = pyqtSignal(QRectF)                  # region visible in percentage
@@ -27,10 +66,15 @@ class QtImageViewer(QGraphicsView):
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
 
-        # local handle to the scene's current image pixmap.
-        self.pixmapitem = QGraphicsPixmapItem()
+        # local handle to the scene's current image.
+        self.pixmapitem = QGraphicsBigImageItem()
         self.pixmapitem.setZValue(0)
-        # Don't add to scene yet - will be added when pixmap is set in setImg()
+        # Don't add to scene yet - will be added when the image is set in setImg()
+
+        # overlay drawn on top of the map (see setOverlayImage)
+        self.overlayitem = QGraphicsBigImageItem()
+        self.overlayitem.setZValue(1)
+        self.overlayitem.setVisible(False)
 
         # OVERLAY
         self.scene_overlay = QGraphicsScene()
@@ -66,7 +110,6 @@ class QtImageViewer(QGraphicsView):
         self.opacity = 1.0
 
         MIN_SIZE = 250
-        self.pixmap = QPixmap(MIN_SIZE, MIN_SIZE)
         self.thumb = None
         self.overlay_image = QImage(1, 1, QImage.Format_ARGB32)
 
@@ -85,8 +128,6 @@ class QtImageViewer(QGraphicsView):
 
         self.img_map = img
         if type(img) is QImage:
-            imageARGB32 = img.convertToFormat(QImage.Format_ARGB32)
-            self.pixmap = QPixmap.fromImage(imageARGB32)
             self.thumb = None
             self.imgwidth = img.width()
             self.imgheight = img.height()
@@ -95,18 +136,21 @@ class QtImageViewer(QGraphicsView):
         else:
             raise RuntimeError("Argument must be a QImage.")
 
-        # Add pixmap item to scene if not already added
+        # Add the image item to scene if not already added
         if self.pixmapitem.scene() is None:
             self.scene.addItem(self.pixmapitem)
-        
-        self.pixmapitem.setPixmap(self.pixmap)
+        if self.overlayitem.scene() is None:
+            self.scene.addItem(self.overlayitem)
+
+        self.pixmapitem.setImage(img)
+        self.overlayitem.setVisible(False)
 
         if zoomf < 0.0000001:
 
             # calculate zoom factor
 
             # Set scene size to image size (!)
-            self.setSceneRect(QRectF(self.pixmap.rect()))
+            self.setSceneRect(QRectF(img.rect()))
 
             # calculate zoom factor
             pixels_of_border = 10
@@ -149,8 +193,11 @@ class QtImageViewer(QGraphicsView):
         self.invalidateScene()
 
     def clear(self):
-        self.pixmapitem.setPixmap(QPixmap())
+        self.pixmapitem.setImage(None)
+        self.overlayitem.setImage(None)
+        self.overlayitem.setVisible(False)
         self.img_map = None
+        self.thumb = None
 
     def disableScrollBars(self):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -203,14 +250,14 @@ class QtImageViewer(QGraphicsView):
         if self.overlay_image.width() <= 1:
             return
 
-        pxmap = self.pixmap.copy()
-        p = QPainter()
-        p.begin(pxmap)
-        p.setOpacity(self.opacity)
-        p.drawImage(0, 0, self.overlay_image)
-        p.end()
+        # the overlay used to be composited into a copy of the whole map, which meant a
+        # full-resolution copy per update; drawing it as an item on top is equivalent and free
+        if self.overlayitem.scene() is None:
+            self.scene.addItem(self.overlayitem)
 
-        self.pixmapitem.setPixmap(pxmap)
+        self.overlayitem.setImage(self.overlay_image)
+        self.overlayitem.setOpacity(self.opacity)
+        self.overlayitem.setVisible(True)
 
     def clipScenePos(self, scenePosition):
         posx = scenePosition.x()
