@@ -25,6 +25,35 @@ from source.Blob import Blob
 from source.Point import Point
 from source.Image import Image
 
+class DataTableView(QTableView):
+    """
+    Table view that lets the application's single-key shortcuts through to the main window.
+
+    QAbstractItemView consumes every letter and digit for its type-ahead search. That made it
+    impossible to work down a list of points from the keyboard: the arrow keys need the table
+    focused, but with the table focused 'A' was swallowed and the point never got labelled, so
+    the viewer had to be clicked first - which then gave the arrow keys back to the viewer.
+
+    Ignoring an unmodified letter or digit lets it propagate up to TagLab.keyPressEvent, so
+    selecting a row, choosing a label and pressing 'A' works without touching the mouse. Keys
+    the table needs for navigation and selection - arrows, Home/End, Page Up/Down, Tab, Space -
+    are untouched, as is anything with Ctrl or Alt held, so Ctrl+A and Ctrl+C still behave.
+
+    Type-ahead search is the only thing given up, and the panel has a Search Id box already.
+    """
+
+    def keyPressEvent(self, event):
+
+        if event.modifiers() == Qt.NoModifier:
+            key = event.key()
+            if (Qt.Key_0 <= key <= Qt.Key_9) or (Qt.Key_A <= key <= Qt.Key_Z) \
+                    or key in (Qt.Key_Plus, Qt.Key_Minus):
+                event.ignore()
+                return
+
+        super(DataTableView, self).keyPressEvent(event)
+
+
 class TableModel(QAbstractTableModel):
     def __init__(self, data):
         super(TableModel, self).__init__()
@@ -109,7 +138,7 @@ class QtTablePanel(QWidget):
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
         self.setMinimumWidth(400)
         self.setMinimumHeight(150)
-        self.data_table = QTableView()
+        self.data_table = DataTableView()
         self.data_table.setMinimumWidth(400)
         self.data_table.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
         self.data_table.setSelectionMode(QAbstractItemView.MultiSelection)
