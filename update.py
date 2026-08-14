@@ -1,142 +1,121 @@
-import platform
-import sys
+"""
+Download the neural networks TagLab needs, and report whether the upstream project has moved on.
+
+This script used to replace the source code as well: it fetched the latest release of
+cnr-isti-vclab/TagLab as a zip, deleted coraline/, docs/, fonts/, icons/, source/ and .github/,
+and overwrote every file in the main directory except config.json. On a customised build that
+silently destroys the customisations, and there is no way to review or undo it.
+
+That half has been removed. This is a git repository, and git already brings in upstream changes
+properly - it merges rather than overwrites, it shows what changed, and it can be undone. What
+git deliberately does *not* carry is the model weights, since models/*.pth, *.pth.tar and *.net
+are all gitignored, so fetching those is what this script is still for.
+
+To bring in changes from upstream instead, see the instructions printed at the end.
+"""
+
+import importlib.util
 import os
 import urllib.request
-import tempfile
-import zipfile
-import shutil
-import subprocess
-from distutils.dir_util import copy_tree
 from pathlib import Path
 
-#directories that will be replaced during the update
-to_replace_directories = ['coraline', 'docs', 'fonts', 'icons', 'source', '.github']
-# note:
-# - all the other directories present in the main directory will be left (and merged if it's the case)
-# - the update may create other directories that are not listed here
-# - all the files (non-directories) in the main directory are replaced, except 'config.json'.
+TAGLAB_DIR = os.path.abspath(os.path.dirname(__file__))
+MODELS_DIR = os.path.join(TAGLAB_DIR, 'models')
 
-osused = platform.system()
+UPSTREAM_REPO = 'cnr-isti-vclab/TagLab'
+UPSTREAM_VERSION_URL = 'https://raw.githubusercontent.com/' + UPSTREAM_REPO + '/main/TAGLAB_VERSION'
+MODELS_URL = 'http://taglab.isti.cnr.it/models/'
 
-github_repo = 'cnr-isti-vclab/TagLab/'
-base_repo = 'https://github.com/' + github_repo
-raw_link = 'https://raw.githubusercontent.com/' + github_repo + 'main/TAGLAB_VERSION'
+NETWORKS = ['dextr_corals.pth', 'deeplab-resnet.pth.tar', 'ritm_corals.pth',
+            'pocillopora.net', 'porites.net', 'pocillopora_porite_montipora.net']
 
-# read offline version
-f_off_version = open("TAGLAB_VERSION", "r")
-taglab_offline_version = f_off_version.read()
-
-print('Raw link: ' + raw_link)
-f_online_version = urllib.request.urlopen(raw_link)
-taglab_online_version = f_online_version.read().decode('utf-8')
-
-offline_spl_version = taglab_offline_version.split('.')
-online_spl_version = taglab_online_version.split('.')
-
-print('offline: ' + str(offline_spl_version))
-print('online: ' + str(online_spl_version))
-
-# Check if I need to update TagLab
-need_to_update = False
-i = 0
-while i < len(online_spl_version) and not need_to_update:
-    if (not (i < len(offline_spl_version))):
-        need_to_update = True
-    else:
-        if(int(online_spl_version[i]) > int(offline_spl_version[i])):
-            need_to_update = True
-        elif(int(online_spl_version[i]) < int(offline_spl_version[i])):
-            need_to_update = False
-            break
-    i=i+1
+# the SAM checkpoint is only worth its 2.4 GB download if segment_anything is installed
+if importlib.util.find_spec('segment_anything'):
+    NETWORKS.append('sam_vit_h_4b8939.pth')
 
 
-if need_to_update:
-    # File to download
-    filename = 'v' + taglab_online_version + '.zip'
-    url = base_repo + 'archive/' + filename
-    print('Downloading ' + url)
-    downloaded_file = tempfile.gettempdir() + '/' +  filename
+def local_version():
     try:
-        urllib.request.urlretrieve(url, downloaded_file)
-    except:
-        raise Exception("Cannot download " + url)
+        with open(os.path.join(TAGLAB_DIR, 'TAGLAB_VERSION'), 'r') as f:
+            return f.read().strip()
+    except OSError:
+        return None
 
-    print('Downloaded file is: ' + downloaded_file)
 
-    #shutil.copyfile('config.json', 'config.json.bak')
+def upstream_version():
+    try:
+        return urllib.request.urlopen(UPSTREAM_VERSION_URL, timeout=10).read().decode('utf-8').strip()
+    except Exception:
+        return None
 
-    # Remove directories from TagLab folder
-    for file_name in os.listdir('.'):
-        if file_name in to_replace_directories:
-            file_path = os.path.join('.', filename)
-            try:
-                if os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-            except Exception as e:
-                print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-    #extract zip
-    with zipfile.ZipFile(downloaded_file, 'r') as zip_ref:
-        zip_ref.extractall('.')
+def download_networks():
+    """
+    Fetch any network weights that are not already present.
 
-    #move all the content of the extracted zip file in the TagLab folder
-    source_dir = './TagLab-' + taglab_online_version
-    target_dir = '.'
+    A failure is reported and skipped rather than aborting: one unreachable file should not stop
+    the others from being downloaded.
+    """
 
-    file_names = os.listdir(source_dir)
+    os.makedirs(MODELS_DIR, exist_ok=True)
 
-    for file_name in file_names:
-        file_path = os.path.join(source_dir, file_name)
-        if (os.path.isdir(file_path)):
-            copy_tree(file_path, os.path.join(target_dir, file_name))
-        elif(file_name != 'config.json'):
-            shutil.move(os.path.join(source_dir, file_name), os.path.join(target_dir, file_name))
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+    urllib.request.install_opener(opener)
 
-    shutil.rmtree(source_dir)
+    missing = []
+    for name in NETWORKS:
+        target = Path(os.path.join(MODELS_DIR, name))
+        if target.is_file():
+            print(name + ' already exists.')
+            continue
 
-    #rebuild coraline
-    if osused != 'Windows':
+        url = MODELS_URL + name
+        print('Downloading ' + url + ' ...')
         try:
-            out = subprocess.check_output(['cmake', '--version'])
-            os.chdir('coraline')
-            result = subprocess.getstatusoutput('cmake .')
-            if result[0] == 0:
-                result = subprocess.getstatusoutput('make')
-                if result[0] == 0:
-                    print('Coraline built correctly.')
-                    os.chdir('..')
-                else:
-                    raise Exception('Error while building Coraline library.\nInstallation aborted.')
-            else:
-                raise Exception('Error while configuring Coraline library.\nInstallation aborted.')
-        except OSError:
-            raise Exception('Cmake not found. Coraline library cannot be compiled. Please install cmake '
-                            'first.\nInstallation aborted.')
-else:
-    print('No need to update: TagLab is already up to date.')
+            urllib.request.urlretrieve(url, str(target))
+        except Exception as e:
+            print('  FAILED: ' + str(e))
+            # a partial file would look present next time round
+            if target.is_file():
+                target.unlink()
+            missing.append(name)
 
-# check for other networks
-print('Downloading networks...')
-base_url = 'http://taglab.isti.cnr.it/models/'
-from os import path
-import urllib.request
-this_directory = path.abspath(path.dirname(__file__))
-net_file_names = ['dextr_corals.pth', 'deeplab-resnet.pth.tar', 'ritm_corals.pth',
-                  'pocillopora.net', 'porites.net', 'pocillopora_porite_montipora.net']
+    return missing
 
-for net_name in net_file_names:
-    filename_dextr_corals = 'dextr_corals.pth'
-    net_file = Path('models/' + net_name)
-    if not net_file.is_file(): #if file not exists
-        try:
-            url_dextr = base_url + net_name
-            print('Downloading ' + url_dextr + '...')
-            opener = urllib.request.build_opener()
-            opener.addheaders = [('User-agent', 'Mozilla/5.0')]
-            urllib.request.install_opener(opener)
-            urllib.request.urlretrieve(url_dextr, 'models/' + net_name)
-        except:
-            raise Exception("Cannot download " + net_name + ".")
+
+def main():
+    print('TagLab networks')
+    print('---------------')
+    missing = download_networks()
+
+    print()
+    mine = local_version()
+    theirs = upstream_version()
+    if mine and theirs and mine != theirs:
+        print('This build is ' + mine + '; upstream ' + UPSTREAM_REPO + ' is at ' + theirs + '.')
+        print('This script no longer replaces the source, because doing so would discard the')
+        print('changes in this fork. To review and merge the upstream changes instead:')
+        print()
+        print('    git fetch upstream')
+        print('    git log --oneline HEAD..upstream/main    # see what changed')
+        print('    git merge upstream/main                  # bring it in, resolving conflicts')
+        print()
+        print('(add the remote first if needed:')
+        print('    git remote add upstream https://github.com/' + UPSTREAM_REPO + '.git)')
+    elif mine and theirs:
+        print('This build is ' + mine + ', the same version as upstream ' + UPSTREAM_REPO + '.')
     else:
-        print(net_name + ' already exists.')
+        print('Could not compare against upstream (offline, or TAGLAB_VERSION is missing).')
+
+    if missing:
+        print()
+        print('These networks could not be downloaded: ' + ', '.join(missing))
+        print('The tools that use them will not work until they are present.')
+        return 1
+
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
