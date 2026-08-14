@@ -44,9 +44,8 @@ See the instructions on the [wiki](https://github.com/cnr-isti-vclab/TagLab/wiki
 
 ## Updating TagLab
 
-This is a customised fork, so the source is updated through git rather than by overwriting it.
-`update.py` no longer replaces any code — it only downloads the neural networks, which are not
-kept in version control:
+To update to the latest version, run the `update.py` script from the terminal (be sure to be in
+the TagLab main folder, see step 2):
 
 ```bash
 python3 update.py
@@ -57,21 +56,17 @@ or, on Windows:
 python.exe update.py
 ```
 
-It also reports whether upstream has released a newer version. To review and merge those changes:
+The script compares your installation against the latest published version. If a newer one is
+available it downloads it and updates the program files, then fetches any neural networks that
+are missing.
 
-```bash
-git fetch upstream
-git log --oneline HEAD..upstream/main    # see what changed
-git merge upstream/main                  # bring it in, resolving conflicts
-```
+**Your own files are never deleted.** The update overwrites program files and adds new ones, but
+leaves everything else in the folder exactly as it is — `config.json`, custom label images,
+dictionaries you have added, exports, and project folders kept inside the TagLab directory. The
+download is fully checked before anything is replaced, so a failed or interrupted update cannot
+leave a broken installation behind.
 
-If the `upstream` remote does not exist yet:
-
-```bash
-git remote add upstream https://github.com/cnr-isti-vclab/TagLab.git
-```
-
-NOTE: If some package is missing after merging upstream changes, re-launch `install.py`.
+NOTE: If some package is missing after an update, re-launch `install.py`.
 
 
 # Citation
