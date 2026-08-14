@@ -70,6 +70,85 @@ class Sampler(object):
                     y = random.randint(ystart + r * side_cell, ystart + r * side_cell + side_cell)
                     self.points.append((x, y))
 
+    def generateWholeMap(self, map_width, map_height, valid_mask=None):
+        """
+        Generate samples over the whole map rather than inside a sampling area.
+
+        valid_mask is a boolean array covering the map, normally read at reduced resolution,
+        marking the pixels that carry data; points are only placed where it is True. Pass None
+        to sample the full rectangle. The mask does not have to match the map's resolution:
+        positions are scaled into it.
+
+        The requested number of points is spread over the area that actually carries data, not
+        over its bounding box, so cropping a map to a non-rectangular ROI does not quietly
+        reduce the number of samples that land inside it.
+        """
+
+        self.reset()
+
+        xstart = self.offset
+        ystart = self.offset
+        xend = map_width - self.offset
+        yend = map_height - self.offset
+
+        if xend <= xstart or yend <= ystart:
+            return
+
+        w = xend - xstart
+        h = yend - ystart
+
+        def is_valid(x, y):
+            if valid_mask is None:
+                return True
+            mh, mw = valid_mask.shape
+            mx = min(mw - 1, max(0, int(x * mw / map_width)))
+            my = min(mh - 1, max(0, int(y * mh / map_height)))
+            return bool(valid_mask[my, mx])
+
+        coverage = 1.0
+        if valid_mask is not None:
+            mh, mw = valid_mask.shape
+            r0 = min(mh - 1, max(0, int(ystart * mh / map_height)))
+            r1 = min(mh, max(r0 + 1, int(yend * mh / map_height)))
+            c0 = min(mw - 1, max(0, int(xstart * mw / map_width)))
+            c1 = min(mw, max(c0 + 1, int(xend * mw / map_width)))
+            coverage = float(valid_mask[r0:r1, c0:c1].mean())
+            if coverage <= 0.0:
+                return
+
+        if self.method == 'Random':
+            # rejection sampling, bounded so that a mostly empty map cannot spin forever
+            attempts = 0
+            max_attempts = int(self.number / max(coverage, 0.01)) * 20 + 10000
+            while len(self.points) < self.number and attempts < max_attempts:
+                attempts += 1
+                x = random.randint(int(xstart), int(xend))
+                y = random.randint(int(ystart), int(yend))
+                if is_valid(x, y):
+                    self.points.append((x, y))
+            return
+
+        # Grid and Stratified: size the cell against the area that carries data
+        area_cell = (w * h * coverage) / float(max(self.number, 1))
+        side_cell = max(1, int(math.sqrt(area_cell)))
+
+        ncol = max(1, round(w / side_cell))
+        nrow = max(1, round(h / side_cell))
+
+        for c in range(0, ncol):
+            for r in range(0, nrow):
+                if self.method == 'Stratified':
+                    x = random.randint(xstart + c * side_cell,
+                                       xstart + c * side_cell + side_cell)
+                    y = random.randint(ystart + r * side_cell,
+                                       ystart + r * side_cell + side_cell)
+                else:
+                    x = xstart + c * side_cell + side_cell / 2
+                    y = ystart + r * side_cell + side_cell / 2
+
+                if x <= xend and y <= yend and is_valid(x, y):
+                    self.points.append((x, y))
+
     def overlap(self, sampling_area):
         """
         Check if the given sampling area overlaps with the existing ones.

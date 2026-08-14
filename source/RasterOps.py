@@ -629,6 +629,39 @@ def saveGeorefLabelMap(label_map, georef_filename, working_area, out_name):
 DEM_Z_UNIT_TO_MM = 1000.0
 
 
+def readValidityMask(filename, max_size=8192, shrink=True):
+    """
+    Boolean mask of the pixels of a raster that actually carry data, read at reduced resolution.
+
+    rasterio's dataset_mask covers all the ways a raster says "nothing here" - an alpha band, a
+    nodata value, an internal mask - and returns everything valid when the file says nothing at
+    all, which is the right answer for a plain JPEG. Reading it decimated keeps it small: a
+    37268 x 38950 ortho comes back as a 14 MB array in a fraction of a second.
+
+    With shrink set, the mask is eroded by one cell so that a point accepted against it is
+    inside the surveyed area at full resolution too, rather than within a decimated cell of its
+    edge.
+
+    Returns (mask, width, height) where width and height are the raster's full pixel size.
+    """
+
+    with rio.open(filename) as src:
+        factor = max(1, int(math.ceil(max(src.width, src.height) / float(max_size))))
+        out_h = max(1, src.height // factor)
+        out_w = max(1, src.width // factor)
+        mask = src.dataset_mask(out_shape=(out_h, out_w)) > 0
+        full_w, full_h = src.width, src.height
+
+    if shrink and mask.all():
+        # nothing is masked out, so there is no edge to stay clear of
+        return mask, full_w, full_h
+
+    if shrink:
+        mask = ndimage.binary_erosion(mask, structure=np.ones((3, 3), bool), border_value=0)
+
+    return mask, full_w, full_h
+
+
 def demToOrthoMapping(ortho, dem, ortho_px_to_mm):
     """
     Work out how a DEM lines up with the ortho it belongs to, and how big a DEM pixel is.

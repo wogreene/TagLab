@@ -4052,8 +4052,13 @@ class TagLab(QMainWindow):
         choosed_method = self.sample_point_widget.combo_method.currentText()
         choosed_point_number = int(self.sample_point_widget.edit_number.text())
         offset = int(float(self.sample_point_widget.edit_offset_px.text()))
-        width = int(float(self.sample_point_widget.edit_width_px.text()))
-        height = int(float(self.sample_point_widget.edit_height_px.text()))
+
+        # the whole-map mode leaves these blank: there is no sampling area to size
+        try:
+            width = int(float(self.sample_point_widget.edit_width_px.text()))
+            height = int(float(self.sample_point_widget.edit_height_px.text()))
+        except ValueError:
+            width = height = 0
 
         if self.project.working_area is not None:
            working_area = self.project.working_area
@@ -4083,6 +4088,30 @@ class TagLab(QMainWindow):
                 equi_spaced = False
 
             sampler.generateAlongTransect(transect, number_of_areas, equi_spaced)
+
+        if self.sample_point_widget.radio_WM.isChecked():
+            rgb_channel = active_image.getRGBChannel()
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                valid_mask, map_w, map_h = rasterops.readValidityMask(rgb_channel.filename)
+            except Exception as e:
+                QApplication.restoreOverrideCursor()
+                msgBox = QMessageBox()
+                msgBox.setWindowTitle(self.TAGLAB_VERSION)
+                msgBox.setText("Could not read the map to find its nodata areas.\n\n" + str(e))
+                msgBox.exec()
+                return
+            QApplication.restoreOverrideCursor()
+
+            sampler.generateWholeMap(map_w, map_h, valid_mask)
+
+            if not sampler.points:
+                msgBox = QMessageBox()
+                msgBox.setWindowTitle(self.TAGLAB_VERSION)
+                msgBox.setText("No points could be placed. The map appears to carry no data, or "
+                               "the offset is larger than the map.")
+                msgBox.exec()
+                return
 
         # add to the project the generated points
         for point in sampler.points:

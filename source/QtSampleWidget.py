@@ -154,6 +154,18 @@ class QtSampleWidget(QWidget):
         self.layoutV3.addLayout(self.layoutH4)
         self.group_T.setLayout(self.layoutV3)
 
+        # sampling the whole map, skipping the pixels that carry no data
+        self.group_WM = QGroupBox()
+        self.radio_WM = QRadioButton("Sample the entire map, excluding nodata")
+        self.lbl_WM = QLabel("No sampling area is used: points are spread over every pixel of the\n"
+                             "map that carries data. Use this when the map is already cropped to\n"
+                             "the region of interest.")
+
+        self.layoutV4 = QVBoxLayout()
+        self.layoutV4.addWidget(self.radio_WM)
+        self.layoutV4.addWidget(self.lbl_WM)
+        self.group_WM.setLayout(self.layoutV4)
+
         # sampling settings
         self.group_settings = QGroupBox()
         self.group_settings.setTitle("Sampling area")
@@ -259,6 +271,7 @@ class QtSampleWidget(QWidget):
         self.layout_sampling.addWidget(self.group_SA)
         self.layout_sampling.addWidget(self.group_WA)
         self.layout_sampling.addWidget(self.group_T)
+        self.layout_sampling.addWidget(self.group_WM)
 
         self.layout_props = QVBoxLayout()
         self.layout_props.addWidget(self.group_settings)
@@ -274,6 +287,7 @@ class QtSampleWidget(QWidget):
         self.radio_buttons.addButton(self.radio_SA)
         self.radio_buttons.addButton(self.radio_WA)
         self.radio_buttons.addButton(self.radio_T)
+        self.radio_buttons.addButton(self.radio_WM)
         self.radio_SA.setChecked(True)
 
         self.enableSAGroup()
@@ -282,6 +296,7 @@ class QtSampleWidget(QWidget):
         self.radio_SA.clicked.connect(self.enableSAGroup)
         self.radio_WA.clicked.connect(self.enableWAGroup)
         self.radio_T.clicked.connect(self.enableTransectGroup)
+        self.radio_WM.clicked.connect(self.enableWholeMapGroup)
 
         self.edit_offset_px.textChanged.connect(self.updateSAOffsetInCm)
         self.edit_offset_cm.textChanged.connect(self.updateSAOffsetInPx)
@@ -405,6 +420,30 @@ class QtSampleWidget(QWidget):
         self.edit_height_px.blockSignals(False)
 
 
+    def setSamplingAreaSizeEnabled(self, enabled):
+        """
+        The width and height of the sampling area mean nothing when the whole map is sampled.
+        """
+
+        for widget in (self.lbl_width, self.edit_width_px, self.lbl_width_px,
+                       self.edit_width_cm, self.lbl_width_cm,
+                       self.lbl_height, self.edit_height_px, self.lbl_height_px,
+                       self.edit_height_cm, self.lbl_height_cm):
+            widget.setEnabled(enabled)
+
+        self.group_settings.setTitle("Sampling area" if enabled else "Sampling")
+
+    @pyqtSlot()
+    def enableWholeMapGroup(self):
+
+        self.radio_WM.setStyleSheet("color: white")
+        self.lbl_WM.setEnabled(True)
+
+        self.disableSAGroup()
+        self.disableWAGroup()
+        self.disableTransectGroup()
+        self.setSamplingAreaSizeEnabled(False)
+
     @pyqtSlot()
     def enableSAGroup(self):
 
@@ -419,6 +458,8 @@ class QtSampleWidget(QWidget):
 
         self.disableWAGroup()
         self.disableTransectGroup()
+        self.disableWholeMapGroup()
+        self.setSamplingAreaSizeEnabled(True)
 
     @pyqtSlot()
     def enableWAGroup(self):
@@ -433,6 +474,8 @@ class QtSampleWidget(QWidget):
 
                 self.disableSAGroup()
                 self.disableTransectGroup()
+                self.disableWholeMapGroup()
+                self.setSamplingAreaSizeEnabled(True)
         else:
             self.radio_SA.setChecked(True)
             self.enableSAGroup()
@@ -470,6 +513,13 @@ class QtSampleWidget(QWidget):
 
         self.disableSAGroup()
         self.disableWAGroup()
+        self.disableWholeMapGroup()
+        self.setSamplingAreaSizeEnabled(True)
+
+    def disableWholeMapGroup(self):
+
+        self.radio_WM.setStyleSheet("color: rgb(90,90,90)")
+        self.lbl_WM.setEnabled(False)
 
     def disableSAGroup(self):
 
@@ -531,11 +581,15 @@ class QtSampleWidget(QWidget):
             msgBox.exec()
             return
 
-        if (self.edit_width_px.text() == "" or genutils.isfloat(self.edit_width_px.text()) == False or
-                self.edit_height_px == "" or genutils.isfloat(self.edit_height_px.text()) == False):
-            msgBox.setText("Please, indicate the size of the sampling area.")
-            msgBox.exec()
-            return
+        # the whole-map mode has no sampling area, so its size is not asked for
+        needs_area_size = not self.radio_WM.isChecked()
+
+        if needs_area_size:
+            if (self.edit_width_px.text() == "" or genutils.isfloat(self.edit_width_px.text()) == False or
+                    self.edit_height_px == "" or genutils.isfloat(self.edit_height_px.text()) == False):
+                msgBox.setText("Please, indicate the size of the sampling area.")
+                msgBox.exec()
+                return
 
         if self.edit_offset_px.text() == "" or genutils.isfloat(self.edit_offset_px.text()) == False:
             msgBox.setText("Please, indicate an offset or put 0 for no offset.")
@@ -547,15 +601,16 @@ class QtSampleWidget(QWidget):
             msgBox.exec()
             return
 
-        if float(self.edit_width_px.text()) <= 0.0:
-            msgBox.setText("Please, indicate a sampling area width greater than zero.")
-            msgBox.exec()
-            return
+        if needs_area_size:
+            if float(self.edit_width_px.text()) <= 0.0:
+                msgBox.setText("Please, indicate a sampling area width greater than zero.")
+                msgBox.exec()
+                return
 
-        if float(self.edit_height_px.text()) <= 0.0:
-            msgBox.setText("Please, indicate a sampling area height greater than zero.")
-            msgBox.exec()
-            return
+            if float(self.edit_height_px.text()) <= 0.0:
+                msgBox.setText("Please, indicate a sampling area height greater than zero.")
+                msgBox.exec()
+                return
 
         if self.radio_SA.isChecked():
             if (self.edit_top_SA.text() == "" or self.edit_top_SA.text().isnumeric() == False or
