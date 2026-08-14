@@ -5391,7 +5391,7 @@ class TagLab(QMainWindow):
             target_classes = training.createTargetClasses(self.activeviewer.annotations)
 
             try:
-                new_dataset.createLabelImage(self.project.labels)
+                new_dataset.createLabelImage(self.project.labels, target_classes)
             except Exception as e:
                 QApplication.restoreOverrideCursor()
                 msgBox = QMessageBox()
@@ -5403,7 +5403,6 @@ class TagLab(QMainWindow):
                 self.disableAreaSelection()
                 return
 
-            new_dataset.convertColorsToLabels(target_classes, self.project.labels)
             new_dataset.computeFrequencies(target_classes)
             target_pixel_size = self.newDatasetWidget.getTargetScale()
 

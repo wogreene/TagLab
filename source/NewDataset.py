@@ -22,8 +22,8 @@ import cv2
 import os
 import math
 import numpy as np
-from PyQt5.QtGui import QPainter, QImage, QPen, QBrush, QColor, qRgb, qRed, qGreen, qBlue
-from PyQt5.QtCore import Qt, QPointF
+from PyQt5.QtGui import QPainter, QImage, QPen, QBrush
+from PyQt5.QtCore import Qt
 import random as rnd
 from source import Image
 from source import genutils
@@ -72,8 +72,17 @@ class NewDataset(object):
 		self.validation_tiles = []
 		self.test_tiles = []
 
-		self.label_image = None
+		# per-pixel class codes (uint8), plus the tables needed to turn them back into colours
 		self.labels = None
+		self.label_colors_by_code = {}
+		self.background_code = 0
+		self._colour_lut = None
+
+		# the orthoimage stays at source resolution; these relate it to the scaled grid that the
+		# tiling geometry uses (see exportAreaCropAndRescale)
+		self.export_scale = 1.0
+		self.export_origin = [0, 0]
+
 		self.data_format = data_format
 
 		#self.idmap = None
@@ -132,31 +141,39 @@ class NewDataset(object):
 			left = (w_scaled - w_prime) // 2
 			self.adjusted_export_area = [top, left, w_prime, h_prime]
 
-		crop_ortho_image = self.ortho_image.copy(x, y, w_exp, h_exp)
-		crop_label_image = self.label_image.copy(x, y, w_exp, h_exp)
-		#crop_id_image = np.copy(self.idmap)
-		#crop_id_image= crop_id_image[y: y+height, x: x+width]
-
 		print("ADJUSTED EXPORT AREA: ", self.adjusted_export_area)
 
-		w = int(crop_ortho_image.width() * scale)
-		h = int(crop_ortho_image.height() * scale)
+		w = int(w_exp * scale)
+		h = int(h_exp * scale)
 
-		if w >= 32767 or h >= 32767:
+		if w < 1 or h < 1:
 			self.ortho_image = None
-			self.label_image = None
+			self.labels = None
 			self.id_image = None
 			return False
-		else:
-			self.ortho_image = crop_ortho_image.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-			self.label_image = crop_label_image.scaled(w, h, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-			#self.idmap = cv2.resize(crop_id_image, dsize=(h, w), interpolation=cv2.INTER_NEAREST) this is for a numpy
 
-			if self.data_format == "COCO" or self.data_format == "YOLO-v5":
-				self.crop_id_image = self.id_image.copy(x, y, w_exp,h_exp)
-				self.id_image = self.crop_id_image.scaled(w, h, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+		# The orthoimage is cropped but deliberately NOT rescaled here. QImage.scaled() cannot
+		# produce anything larger than Qt's 32767 coordinate limit - past that the result comes
+		# back black - which used to make an export at or near full resolution impossible on a
+		# large map. Each tile is instead cut at source resolution and scaled on its own, where
+		# the sizes involved are a few hundred pixels. It also avoids holding a second
+		# full-resolution copy of the map.
+		self.ortho_image = self.ortho_image.copy(x, y, w_exp, h_exp)
+		self.export_scale = scale
+		self.export_origin = [y, x]
 
-			return True
+		# the labels and ids are numpy arrays resized with cv2, which has no coordinate limit,
+		# and they stay on the scaled grid because that is the grid the tiling geometry, the
+		# sampling areas and computeExactCoverage all work in. Nearest neighbour, so that
+		# resizing never invents a class code that no region carries.
+		crop_labels = self.labels[y:y + h_exp, x:x + w_exp]
+		self.labels = cv2.resize(crop_labels, dsize=(w, h), interpolation=cv2.INTER_NEAREST)
+
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+			crop_ids = self.id_image[y:y + h_exp, x:x + w_exp]
+			self.id_image = cv2.resize(crop_ids, dsize=(w, h), interpolation=cv2.INTER_NEAREST)
+
+		return True
 
 
 	def isFullyInsideBBox(self, bbox1, bbox2):
@@ -431,8 +448,9 @@ class NewDataset(object):
 
 		area_info = []
 
-		map_w = self.ortho_image.width()
-		map_h = self.ortho_image.height()
+		# the areas found here are used to index self.labels, so they have to be measured
+		# against it rather than against the orthoimage, which is kept at source resolution
+		map_h, map_w = self.labels.shape
 
 		area_w = int(math.sqrt(0.15) * map_w)
 		area_h = int(math.sqrt(0.15) * map_h)
@@ -555,87 +573,171 @@ class NewDataset(object):
 		return val_area, test_area
 
 
-	def createLabelImage(self, labels_dictionary):
+	def buildClassCodeTables(self, labels_dictionary, target_classes):
 		"""
-		Creates a large labeled image of the entire annotated area using class-colored blobs
+		Work out the class code of every pixel colour, and the colour of every class code.
+
+		The export used to paint each region in its class colour onto a full-size RGB image and
+		then read that image back, matching colours to recover the class codes. This reproduces
+		that mapping exactly - including the order in which colliding colours overwrite each
+		other, and the white assigned to a class missing from the dictionary - so that the codes
+		come out the same as before, without the image ever being built.
 		"""
 
-		# create a black canvas of the same size of your map
+		colour_to_code = {}
+		code_to_colour = {}
+
+		for name in target_classes.keys():
+			code = target_classes[name]
+			label = labels_dictionary.get(name)
+			# a class with no entry in the dictionary was matched as white, and so never matched
+			# anything that had actually been painted
+			colour = tuple(label.fill) if label is not None else (255, 255, 255)
+
+			colour_to_code[colour] = code
+			code_to_colour[code] = colour
+
+		return colour_to_code, code_to_colour
+
+	def createLabelImage(self, labels_dictionary, target_classes):
+		"""
+		Rasterise the class of every annotated region into one class code per pixel.
+
+		The codes are written straight into a uint8 array with cv2.fillPoly. Painting them into an
+		RGB image with a QPainter first, as this used to, cost 4 bytes per pixel for the image, 3
+		more to read it back and 8 more for an int64 code array - about 16 bytes per pixel, or
+		23 GB on a 37268 x 38950 map - and could not draw past Qt's 32767 coordinate limit at all.
+		fillPoly has no such limit and needs 1 byte per pixel.
+
+		This also makes the labels agree with blob.getMask(), which is already rasterised the same
+		way and is what blob.area is measured from. Region outlines can therefore differ from the
+		previous output by a pixel, since Qt's fill rule and OpenCV's do not round identically.
+		"""
+
 		w = self.ortho_image.width()
 		h = self.ortho_image.height()
 
-		# the blobs are rasterized with a QPainter, and Qt's raster engine drops everything it
-		# draws past 32767: on a larger map the labels would silently come out black instead
-		if genutils.exceedsPaintLimit(w, h):
-			raise Exception(
-				"The map is " + str(w) + "x" + str(h) + " pixels. Dataset export rasterizes the "
-				"labels with Qt, which cannot paint beyond " + str(genutils.QT_RASTER_COORD_LIMIT) +
-				" pixels, so the exported labels would be incomplete. Please define a working area "
-				"of at most " + str(genutils.QT_RASTER_COORD_LIMIT) + "x" +
-				str(genutils.QT_RASTER_COORD_LIMIT) + " pixels and export that instead.")
+		if len(target_classes) > 255:
+			raise Exception("Dataset export supports up to 255 classes, but this project has " +
+			                str(len(target_classes)) + ".")
 
-		labelimg = QImage(w, h, QImage.Format_RGB32)
-		labelimg.fill(qRgb(0, 0, 0))
+		colour_to_code, code_to_colour = self.buildClassCodeTables(labels_dictionary, target_classes)
 
-		painter = QPainter(labelimg)
+		# whatever the black canvas used to map to is what an unannotated pixel gets
+		background_code = colour_to_code.get((0, 0, 0), 0)
+		code_to_colour.setdefault(background_code, (0, 0, 0))
+		self.label_colors_by_code = code_to_colour
+		self.background_code = background_code
+		self._colour_lut = None
 
-		# CREATE LABEL IMAGE
-		for i, blob in enumerate(self.blobs):
+		self.labels = np.full((h, w), background_code, dtype=np.uint8)
 
-			if blob.qpath_gitem.isVisible():
-
-				if blob.class_name == "Empty":
-					rgb = qRgb(0, 0, 0)
-				else:
-					class_color = labels_dictionary[blob.class_name].fill
-					rgb = qRgb(class_color[0], class_color[1], class_color[2])
-
-				painter.setBrush(QBrush(QColor(rgb)))
-				painter.drawPath(blob.qpath_gitem.path())
-
-		painter.end()
-		self.label_image = labelimg
-
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		need_ids = self.data_format == "COCO" or self.data_format == "YOLO-v5"
+		if need_ids:
 			self.id_image = np.zeros((h, w), dtype=np.int32)
 
-			for i, blob in enumerate(self.blobs):
+		for blob in self.blobs:
 
-				if blob.qpath_gitem.isVisible():
-					if blob.class_name != "Empty":
-						points = blob.contour.round().astype(np.int32)
-						fillPoly(self.id_image, pts=[points], color = blob.id)
-						for inner_contour in blob.inner_contours:
-							points = inner_contour.round().astype(np.int32)
-							fillPoly(self.id_image, pts=[points], color=0)
+			if not blob.qpath_gitem.isVisible():
+				continue
 
-			self.id_image = genutils.integerMapToQImage(self.id_image)
-
-	def convertColorsToLabels(self, target_classes, labels_colors):
-		"""
-		Convert the label image to a numpy array with the labels' values.
-		NOTE: target_classes is a dictionary. The key is the label name which maps to the label code.
-		"""
-
-		label_w = self.label_image.width()
-		label_h = self.label_image.height()
-
-		imglbl = genutils.qimageToNumpyArray(self.label_image)
-
-		# classes with unknown color (color not present in the given dictionary) are assigned to white
-		self.labels = np.zeros((label_h, label_w), dtype='int64')
-		for key in target_classes.keys():
-			label = labels_colors.get(key)
-			label_code = target_classes[key]
-
-			if label is None:
-				class_colors = [255, 255, 255]
+			if blob.class_name == "Empty":
+				code = background_code
 			else:
-				class_colors = label.fill
+				label = labels_dictionary.get(blob.class_name)
+				colour = tuple(label.fill) if label is not None else (0, 0, 0)
+				code = colour_to_code.get(colour, background_code)
 
-			idx = np.where((imglbl[:, :, 0] == class_colors[0]) & (imglbl[:, :, 1] == class_colors[1]) & (imglbl[:, :, 2] == class_colors[2]))
-			self.labels[idx] = label_code
+			contour = blob.contour.round().astype(np.int32)
+			fillPoly(self.labels, pts=[contour], color=int(code))
+			for inner_contour in blob.inner_contours:
+				inner = inner_contour.round().astype(np.int32)
+				fillPoly(self.labels, pts=[inner], color=int(background_code))
 
+			if need_ids and blob.class_name != "Empty":
+				fillPoly(self.id_image, pts=[contour], color=int(blob.id))
+				for inner_contour in blob.inner_contours:
+					inner = inner_contour.round().astype(np.int32)
+					fillPoly(self.id_image, pts=[inner], color=0)
+
+	def labelsToColourImage(self, codes):
+		"""
+		Turn an array of class codes back into the colour image the exporter writes out.
+		"""
+
+		return genutils.rgbToQImage(self.colourLookupTable()[codes])
+
+	def colourLookupTable(self):
+		"""
+		256-entry code to RGB table, built once and reused for every tile.
+		"""
+
+		if self._colour_lut is None:
+			lut = np.zeros((256, 3), dtype=np.uint8)
+			for code, colour in self.label_colors_by_code.items():
+				if 0 <= code < 256:
+					lut[code] = colour
+			self._colour_lut = lut
+
+		return self._colour_lut
+
+	def colourKeyAt(self, codes, row, col):
+		"""
+		The colour key of one pixel of a crop, in the "rrr-ggg-bbb" form the exporter uses.
+		"""
+
+		if row < 0 or col < 0 or row >= codes.shape[0] or col >= codes.shape[1]:
+			return "000-000-000"
+
+		colour = self.label_colors_by_code.get(int(codes[row, col]), (0, 0, 0))
+		return Label.convertColorToKey(colour[0], colour[1], colour[2])
+
+	def cropOrthoTile(self, top, left):
+		"""
+		Cut one tile out of the orthoimage.
+
+		The tiling geometry is expressed on the scaled grid, while the orthoimage is held at its
+		own resolution, so the tile's position and size are converted back before cutting and
+		the result is then scaled to tile_size. Rescaling per tile rather than rescaling the
+		whole map keeps every QImage.scaled() call far below Qt's 32767 limit, which is what
+		blocked exporting from a large map at close to full resolution.
+		"""
+
+		scale = self.export_scale
+
+		if scale == 1.0:
+			return genutils.cropQImage(self.ortho_image, [top, left, self.tile_size, self.tile_size])
+
+		source_top = int(round(top / scale))
+		source_left = int(round(left / scale))
+		source_size = max(1, int(round(self.tile_size / scale)))
+
+		crop = genutils.cropQImage(self.ortho_image, [source_top, source_left,
+		                                             source_size, source_size])
+
+		return crop.scaled(self.tile_size, self.tile_size,
+		                   Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
+	@staticmethod
+	def cropArray(source, top, left, size, fill):
+		"""
+		Crop a square tile out of an array, padding with fill where the tile runs off the edge.
+
+		QImage.copy() pads an out-of-bounds crop with zeroes, and this keeps that behaviour for
+		the arrays that replaced the label and id images.
+		"""
+
+		out = np.full((size, size), fill, dtype=source.dtype)
+
+		y0 = max(0, top)
+		x0 = max(0, left)
+		y1 = min(source.shape[0], top + size)
+		x1 = min(source.shape[1], left + size)
+
+		if y1 > y0 and x1 > x0:
+			out[y0 - top:y1 - top, x0 - left:x1 - left] = source[y0:y1, x0:x1]
+
+		return out
 
 	def setupAreas(self, mode, target_classes=None):
 		"""
@@ -1361,25 +1463,22 @@ class NewDataset(object):
 			top = cy - half_tile_size
 			left = cx - half_tile_size
 
-			# RGB image
-			cropimg = genutils.cropQImage(self.ortho_image, [top, left, self.tile_size, self.tile_size])
+			# RGB image, cut from the orthoimage at its own resolution and scaled to the tile
+			cropimg = self.cropOrthoTile(top, left)
 			filenameRGB = os.path.join(basenameim, tilename + str.format("_{0:04d}", (i)) + ".png")
 			cropimg.save(filenameRGB)
 
 			# image label
-			croplabel = genutils.cropQImage(self.label_image, [top, left, self.tile_size, self.tile_size])
+			crop_codes = self.cropArray(self.labels, top, left, self.tile_size, self.background_code)
+			croplabel = self.labelsToColourImage(crop_codes)
 			filenameLabel = os.path.join(basenamelab, tilename + str.format("_{0:04d}", (i)) + ".png")
 			croplabel.save(filenameLabel)
 
 			if self.data_format == "COCO" or self.data_format == "YOLO-v5":
 
-				cropidlabel = genutils.cropQImage(self.id_image, [top, left, self.tile_size, self.tile_size])
-				cropidlabel = genutils.qimageToNumpyArray(cropidlabel)
-				cropidlabel = cropidlabel.astype(np.int32)
-
-				# decode ids
-				regions_map = np.zeros((cropidlabel.shape[0], cropidlabel.shape[1]), dtype=np.int32)
-				regions_map = cropidlabel[:,:,0] + cropidlabel[:,:,1] * 256 + cropidlabel[:,:,2] * 65536
+				# the region ids are kept as integers throughout; they used to be encoded into
+				# the RGB channels of an image and decoded again here, for no gain
+				regions_map = self.cropArray(self.id_image, top, left, self.tile_size, 0)
 				regions = measure.regionprops(regions_map)
 
 				if self.data_format == "YOLO-v5":
@@ -1392,8 +1491,7 @@ class NewDataset(object):
 						n = blob.contour.shape[0]
 						row = region.centroid[0]
 						col = region.centroid[1]
-						rgb = croplabel.pixel(int(col), int(row))
-						color_key = Label.convertColorToKey(qRed(rgb), qGreen(rgb), qBlue(rgb))
+						color_key = self.colourKeyAt(crop_codes, int(row), int(col))
 						if color_key != "000-000-000":
 							class_code = self.yolo_class_mapper.get(color_key)
 							if class_code is None:
@@ -1437,8 +1535,8 @@ class NewDataset(object):
 						category_id = -1
 						for jj in range(10):
 							N = int((jj * region.coords.shape[0]) / 10)
-							rgb = croplabel.pixel(region.coords[N, 1], region.coords[N, 0])
-							color_key = Label.convertColorToKey(qRed(rgb), qGreen(rgb), qBlue(rgb))
+							color_key = self.colourKeyAt(crop_codes,
+							                             region.coords[N, 0], region.coords[N, 1])
 							if color_key != "000-000-000":
 								category_id = color_to_category_id[color_key]
 
@@ -1484,14 +1582,19 @@ class NewDataset(object):
 
 		else:
 
-			W = self.label_image.width()
-			H = self.label_image.height()
+			H, W = self.labels.shape
 			offx = 0
 			offy = 0
 
-		labelimg = QImage(W, H, QImage.Format_RGB32)
+		# this preview is drawn with a QPainter, which cannot place anything past 32767
+		if genutils.exceedsPaintLimit(W, H):
+			print("The tile preview was skipped: the export area is %dx%d, larger than the "
+			      "%d pixels Qt can draw into." % (W, H, genutils.QT_RASTER_COORD_LIMIT))
+			return
+
+		labelimg = self.labelsToColourImage(
+			self.cropArray(self.labels, offy, offx, max(W, H), self.background_code)[0:H, 0:W])
 		painter = QPainter(labelimg)
-		painter.drawImage(QPointF(-offx, -offy), self.label_image)
 
 		SAMPLE_SIZE = 20
 		HALF_SAMPLE_SIZE = SAMPLE_SIZE / 2
@@ -1570,7 +1673,7 @@ class NewDataset(object):
 
 		if show_areas is True:
 
-			pen_width = int(min(self.label_image.width(), self.label_image.height()) / 200.0)
+			pen_width = int(min(self.labels.shape[1], self.labels.shape[0]) / 200.0)
 
 			painter.setBrush(Qt.NoBrush)
 			pen = QPen(Qt.blue)
