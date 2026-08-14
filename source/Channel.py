@@ -23,6 +23,7 @@ import rasterio as rio
 from rasterio.windows import Window
 from source import genutils
 import numpy as np
+import math
 import os
 
 class Channel(object):
@@ -50,12 +51,42 @@ class Channel(object):
 
         # typically the depth map is stored in a 32-bit Tiff
         if self.type == "DEM":
-            dem = rio.open(filename)
-            self.float_map = dem.read(1).astype(np.float32)
-            self.nodata = dem.nodata
-            self.qimage = genutils.floatmapToQImage(self.float_map, self.nodata)
+            with rio.open(filename) as dem:
+                self.float_map = dem.read(1).astype(np.float32)
+                self.nodata = dem.nodata
+                px_x, px_y = self.groundPixelSize(dem)
+
+            # shaded relief rather than a flat grey ramp: on a reef DEM the depth range is
+            # metres while the structure of interest is centimetres, so a global stretch
+            # leaves the detail invisible
+            self.qimage = genutils.floatmapToHillshadeQImage(self.float_map, self.nodata,
+                                                             px_x, px_y)
 
         return self.qimage
+
+    def groundPixelSize(self, dataset):
+        """
+        Size of one pixel on the ground, in the same unit as the DEM's elevations (metres).
+
+        Returns (None, None) for an unreferenced raster, which tells the hillshade to work out
+        its own scale from the data.
+        """
+
+        transform = dataset.transform
+        if dataset.crs is None or transform is None or transform.is_identity:
+            return None, None
+
+        if not dataset.crs.is_geographic:
+            return abs(transform.a), abs(transform.e)
+
+        # geographic CRS: the transform is in degrees while the elevations are in metres, so
+        # the two have to be reconciled before any slope means anything
+        _, centre_lat = transform * (dataset.width / 2.0, dataset.height / 2.0)
+        p = math.radians(centre_lat)
+        m_per_deg_lat = 111132.92 - 559.82 * math.cos(2 * p) + 1.175 * math.cos(4 * p)
+        m_per_deg_lon = 111412.84 * math.cos(p) - 93.5 * math.cos(3 * p)
+
+        return abs(transform.a) * m_per_deg_lon, abs(transform.e) * m_per_deg_lat
 
     def loadRGB(self, filename):
         """

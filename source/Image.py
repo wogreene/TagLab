@@ -118,25 +118,78 @@ class Image(object):
 
         img = rio.open(filename)
 
-        # check image size consistency (all the channels must have the same size)
-        if self.width is not None and self.height is not None:
-            if self.width != img.width or self.height != img.height:
-                raise Exception("Size of the images is not consistent! It is " + str(img.width) + "x" +
-                                str(img.height) + ", should have been: " + str(self.width) + "x" + str(self.height))
-
         # NOTE: the old 32767 x 32767 limit came from Qt's raster paint engine, whose coordinates
         # are clamped to 32767. That clamp only applies when *drawing into* an image; loading,
         # cropping and displaying a larger map works, so no dimension check is enforced here.
         # The practical limit is now memory: the map is held uncompressed at 4 bytes per pixel.
 
-        if img.crs is not None:
-            # this image contains georeference information
-            self.georef_filename = filename
+        if type == "DEM" and self.width is not None and self.height is not None:
+            # A DEM does not have to share the ortho's grid. A DEM downsampled to, say, 2mm
+            # against a 0.5mm ortho is a far lighter product, and where the two are
+            # georeferenced their geotransforms say exactly how they line up; where they are
+            # not, the DEM is taken to cover the same extent. Either way the ortho keeps
+            # defining the pixel grid that annotations live in, so width/height are not touched.
+            self.checkDEMIsCompatible(img)
+        else:
+            # all the channels sharing the ortho grid must have the same size
+            if self.width is not None and self.height is not None:
+                if self.width != img.width or self.height != img.height:
+                    raise Exception("Size of the images is not consistent! It is " + str(img.width) + "x" +
+                                    str(img.height) + ", should have been: " + str(self.width) + "x" + str(self.height))
 
-        self.width = img.width
-        self.height = img.height
+            self.width = img.width
+            self.height = img.height
+
+        # georef_filename is what every georeferenced export uses to turn ortho pixels into world
+        # coordinates, so it must name a raster on the ortho's own grid. A DEM only qualifies
+        # when it happens to share that grid exactly.
+        if img.crs is not None:
+            if type != "DEM" or (img.width == self.width and img.height == self.height):
+                self.georef_filename = filename
 
         self.channels.append(Channel(filename, type))
+
+    def checkDEMIsCompatible(self, dem):
+        """
+        Verify that an open DEM raster can be matched to this image's ortho grid.
+
+        Where both rasters are georeferenced the check is real: same CRS, and extents that
+        actually overlap. Where either is unreferenced there is nothing to check against - the
+        DEM is simply assumed to cover the same ground as the ortho, which is how a DEM cropped
+        alongside its ortho is normally produced.
+        """
+
+        if dem.crs is None or not self.georef_filename:
+            return
+
+        try:
+            ortho = rio.open(self.georef_filename)
+        except Exception:
+            return
+
+        with ortho:
+            if ortho.crs is None:
+                return
+
+            if ortho.crs != dem.crs:
+                raise Exception("The DEM is in " + str(dem.crs) + " but the map is in " +
+                                str(ortho.crs) + ". Please reproject the DEM to the same "
+                                "coordinate reference system as the map.")
+
+            ob, db = ortho.bounds, dem.bounds
+            overlap_w = min(ob.right, db.right) - max(ob.left, db.left)
+            overlap_h = min(ob.top, db.top) - max(ob.bottom, db.bottom)
+            ortho_w = ob.right - ob.left
+            ortho_h = ob.top - ob.bottom
+
+            if overlap_w <= 0.0 or overlap_h <= 0.0:
+                raise Exception("The DEM does not overlap the map at all. Please check that the "
+                                "two files cover the same area.")
+
+            covered = (overlap_w * overlap_h) / (ortho_w * ortho_h)
+            if covered < 0.5:
+                raise Exception("The DEM only covers " + str(round(covered * 100.0)) +
+                                "% of the map. Please supply a DEM cropped to the same area.")
 
     def create_labels_table(self, labels):
         '''
@@ -238,16 +291,19 @@ class Image(object):
     def updateChannel(self, filename, type):
         img = rio.open(filename)
 
-        # check image size consistency (all the channels must have the same size)
-        if self.width is not None and self.height is not None:
-            if self.width != img.width or self.height != img.height:
-                raise Exception("Size of the images is not consistent! It is " + str(img.width) + "x" +
-                                str(img.height) + ", should have been: " + str(self.width) + "x" + str(self.height))
-                return
+        if type == "DEM" and self.width is not None and self.height is not None:
+            # as in addChannel: a DEM may be at its own resolution
+            self.checkDEMIsCompatible(img)
+        else:
+            # check image size consistency (all the channels must have the same size)
+            if self.width is not None and self.height is not None:
+                if self.width != img.width or self.height != img.height:
+                    raise Exception("Size of the images is not consistent! It is " + str(img.width) + "x" +
+                                    str(img.height) + ", should have been: " + str(self.width) + "x" + str(self.height))
 
         if img.crs is not None:
-            # this image contains georeference information
-            self.georef_filename = filename
+            if type != "DEM" or (img.width == self.width and img.height == self.height):
+                self.georef_filename = filename
 
         for index, channel in enumerate(self.channels):
             if channel.type == type:

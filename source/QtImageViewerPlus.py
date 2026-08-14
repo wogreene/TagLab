@@ -340,10 +340,46 @@ class QtImageViewerPlus(QtImageViewer):
             if img is None or img.isNull():
                 raise Exception("Could not load or find the image: " + filename)
 
+        # scene coordinates are always ortho pixels: a DEM at a coarser resolution is drawn
+        # scaled up to the same extent rather than shrinking the scene under the annotations
+        scene_size = (self.image.width, self.image.height)
+        sampling_img = self.samplingImage(img)
+
         if switch:
-            self.setChannelImg(img, self.zoom_factor)
+            self.setChannelImg(img, self.zoom_factor, scene_size, sampling_img)
         else:
-            self.setChannelImg(img)
+            self.setChannelImg(img, 0.0, scene_size, sampling_img)
+
+    def samplingImage(self, displayed_img):
+        """
+        The image the tools should read, which must be at the resolution of the ortho grid.
+
+        Every tool crops img_map using scene coordinates, so a channel stored at a coarser
+        resolution than the ortho cannot serve as img_map: the crops would come from the wrong
+        place. When that happens the RGB channel is used instead, so the segmentation tools keep
+        working while a downsampled DEM is on screen - they read the full-resolution imagery
+        underneath the pixels being displayed.
+
+        A DEM that does share the ortho grid is returned unchanged, which is how it has always
+        behaved.
+        """
+
+        if displayed_img is None:
+            return None
+
+        if (displayed_img.width() == self.image.width and
+                displayed_img.height() == self.image.height):
+            return displayed_img
+
+        rgb_channel = self.image.getRGBChannel()
+        if rgb_channel is None:
+            return displayed_img
+
+        if rgb_channel.qimage is not None:
+            return rgb_channel.qimage
+
+        rgb_img = self.loadChannelData(rgb_channel)
+        return rgb_img if rgb_img is not None else displayed_img
 
     def loadChannelData(self, channel):
         """
@@ -368,12 +404,12 @@ class QtImageViewerPlus(QtImageViewer):
             # without this the application would be stuck with the wait cursor after a failure
             QApplication.restoreOverrideCursor()
 
-    def setChannelImg(self, channel_img, zoomf=0.0):
+    def setChannelImg(self, channel_img, zoomf=0.0, scene_size=None, sampling_img=None):
         """
         Set the scene's current image (input image must be a QImage)
         For calculating the zoom factor automatically set it to 0.0.
         """
-        self.setImg(channel_img, zoomf)
+        self.setImg(channel_img, zoomf, scene_size, sampling_img)
 
     def clear(self):
 

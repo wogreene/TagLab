@@ -120,17 +120,25 @@ class QtImageViewer(QGraphicsView):
         self.setMouseTracking(True)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
 
-    def setImg(self, img, zoomf=0.0):
+    def setImg(self, img, zoomf=0.0, scene_size=None, sampling_img=None):
         """
         Set the scene's current image (input image must be a QImage)
         For calculating the zoom factor automatically set it to 0.0.
+
+        scene_size is the (width, height) the image should occupy in scene coordinates, and
+        defaults to the image's own size. A DEM stored at a coarser resolution than the ortho is
+        drawn scaled up to fill the same scene rectangle, so scene coordinates always stay in
+        ortho pixels and the annotations keep lining up whichever channel is being viewed.
+
+        sampling_img is the image the tools read through img_map. Every tool crops img_map with
+        scene coordinates, so img_map has to be at scene resolution; when the displayed channel
+        is not (a coarser DEM), the caller supplies an image that is.
         """
 
-        self.img_map = img
+        self.img_map = sampling_img if sampling_img is not None else img
         if type(img) is QImage:
             self.thumb = None
-            self.imgwidth = img.width()
-            self.imgheight = img.height()
+            self.imgwidth, self.imgheight = scene_size if scene_size else (img.width(), img.height())
             if self.imgheight:
                 self.ZOOM_FACTOR_MIN = min(1.0 * self.width() / self.imgwidth, 1.0 * self.height() / self.imgheight)
         else:
@@ -143,6 +151,7 @@ class QtImageViewer(QGraphicsView):
             self.scene.addItem(self.overlayitem)
 
         self.pixmapitem.setImage(img)
+        self.pixmapitem.setScale(self.imgwidth / img.width() if img.width() else 1.0)
         self.overlayitem.setVisible(False)
 
         if zoomf < 0.0000001:
@@ -150,7 +159,7 @@ class QtImageViewer(QGraphicsView):
             # calculate zoom factor
 
             # Set scene size to image size (!)
-            self.setSceneRect(QRectF(img.rect()))
+            self.setSceneRect(QRectF(0.0, 0.0, float(self.imgwidth), float(self.imgheight)))
 
             # calculate zoom factor
             pixels_of_border = 10
@@ -230,8 +239,9 @@ class QtImageViewer(QGraphicsView):
     def clampCoords(self, x, y):
 
         if self.img_map is not None:
-            xc = max(0, min(int(x), self.img_map.width()))
-            yc = max(0, min(int(y), self.img_map.height()))
+            # clamp in scene coordinates, which are ortho pixels whatever channel is displayed
+            xc = max(0, min(int(x), self.imgwidth))
+            yc = max(0, min(int(y), self.imgheight))
         else:
             xc = 0
             yc = 0
@@ -293,8 +303,8 @@ class QtImageViewer(QGraphicsView):
             print("Warning: Image not loaded. Cannot center image.")
             return
         
-        xmap = float(self.img_map.width()) * x
-        ymap = float(self.img_map.height()) * y
+        xmap = float(self.imgwidth) * x
+        ymap = float(self.imgheight) * y
 
         view = self.viewportToScene()
         (w, h) = (view.width(), view.height())
@@ -302,8 +312,8 @@ class QtImageViewer(QGraphicsView):
         posx = max(0, xmap - w / 2)
         posy = max(0, ymap - h / 2)
 
-        posx = min(posx, self.img_map.width() - w / 2)
-        posy = min(posy, self.img_map.height() - h / 2)
+        posx = min(posx, self.imgwidth - w / 2)
+        posy = min(posy, self.imgheight - h / 2)
 
         self.horizontalScrollBar().setValue(int(posx * zf))
         self.verticalScrollBar().setValue(int(posy * zf))

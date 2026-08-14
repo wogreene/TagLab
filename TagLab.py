@@ -5762,26 +5762,63 @@ class TagLab(QMainWindow):
         if self.activeviewer is None:
             return
 
-        # get the file name of the Tiff which stores the depth
-        input_tiff = ""
-        if self.activeviewer.image is not None:
-            for channel in self.activeviewer.image.channels:
-                if channel.type == "DEM":
-                    input_tiff = channel.filename
+        image = self.activeviewer.image
+        if image is None:
+            return
 
-        if input_tiff == "":
+        dem_channel = image.getDEMChannel()
+        rgb_channel = image.getRGBChannel()
+
+        if dem_channel is None or rgb_channel is None:
             box = QMessageBox()
+            box.setWindowTitle(self.TAGLAB_VERSION)
             box.setText("DEM not found! You need a DEM to compute the surface area.")
             box.exec()
             return
 
+        if image.map_px_to_mm_factor == "":
+            box = QMessageBox()
+            box.setWindowTitle(self.TAGLAB_VERSION)
+            box.setText("The pixel size of this map is not set. Surface area is derived from it, "
+                        "so please set it in the map settings first.")
+            box.exec()
+            return
+
         QApplication.setOverrideCursor(Qt.WaitCursor)
-
-        georef_filename = self.activeviewer.image.georef_filename
         blobs = self.activeviewer.annotations.seg_blobs
-        rasterops.calculateAreaUsingSlope(input_tiff, blobs)
-
+        try:
+            stats = rasterops.calculateSurfaceAreas(rgb_channel.filename, dem_channel.filename,
+                                                    image.pixelSize(), blobs)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            box = QMessageBox()
+            box.setWindowTitle(self.TAGLAB_VERSION)
+            box.setText("Could not compute the surface area.\n\n" + str(e))
+            box.exec()
+            return
         QApplication.restoreOverrideCursor()
+
+        uncovered = [b for b in blobs if stats.get(b.id, (0.0, 0.0))[0] < 1.0]
+        # a large trim means the outline caught a step in the DEM - the lip of an overhang or a
+        # crevice beside the colony - which is worth eyeballing rather than taking on trust
+        trimmed = [b for b in blobs if stats.get(b.id, (0.0, 0.0))[1] > 0.25]
+
+        messages = []
+        if uncovered:
+            messages.append(str(len(uncovered)) + " of " + str(len(blobs)) + " regions are not "
+                            "fully covered by the DEM and were left without a surface area.")
+        if trimmed:
+            messages.append(str(len(trimmed)) + " regions had more than a quarter of their "
+                            "surface area coming from a few very steep pixels, which was trimmed "
+                            "as substrate. Check that their outlines do not overlap a ledge: " +
+                            ", ".join(str(b.id) for b in trimmed[:12]) +
+                            ("..." if len(trimmed) > 12 else ""))
+
+        if messages:
+            box = QMessageBox()
+            box.setWindowTitle(self.TAGLAB_VERSION)
+            box.setText("\n\n".join(messages))
+            box.exec()
 
         current_area_mode = self.compare_panel.comboboxAreaMode.currentText()
         self.updateAreaMode(current_area_mode.lower())

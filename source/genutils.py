@@ -193,6 +193,85 @@ def integerMapToQImage(int_map):
     return qimg
 
 
+def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=None,
+                              azimuth=315.0, altitude=45.0, elevation_mix=0.2):
+    """
+    Render a DEM as shaded relief.
+
+    A plain min/max grey ramp is nearly useless on a reef DEM: the raster spans metres of depth
+    while the structure worth seeing is centimetres, so the interesting detail lands inside one
+    or two grey levels. Hillshade responds to the *local* gradient instead, which is exactly the
+    signal that the global stretch throws away.
+
+    px_x and px_y are the ground size of a pixel in the same unit as the elevations. When they
+    are not known (an unreferenced DEM) the gradients are normalised by a robust percentile of
+    their own magnitude, which keeps the shading legible whatever the units happen to be.
+
+    elevation_mix blends a little of the (percentile-stretched) depth back in, so the image
+    still reads as deeper/shallower rather than as pure texture. Nodata is left black.
+    """
+
+    h = floatmap.shape[0]
+    w = floatmap.shape[1]
+
+    z = floatmap.astype(np.float32, copy=True)
+    if nodata is not None and not (isinstance(nodata, float) and math.isnan(nodata)):
+        z[z == nodata] = np.nan
+    z[~np.isfinite(z)] = np.nan
+
+    valid = np.isfinite(z)
+    if not valid.any():
+        return rgbToQImage(np.zeros([h, w, 3], dtype=np.uint8))
+
+    if px_x and px_y:
+        gy, gx = np.gradient(z, np.float32(px_y), np.float32(px_x))
+    else:
+        gy, gx = np.gradient(z)
+        # no scale to work from: normalise so that typical relief reads as a moderate slope
+        magnitude = np.sqrt(gx * gx + gy * gy)
+        finite = np.isfinite(magnitude)
+        reference = np.percentile(magnitude[finite], 90) if finite.any() else 0.0
+        if reference > 0.0:
+            gx /= reference
+            gy /= reference
+
+    # surface normal is (-gx, -gy, 1) normalised; array rows run north to south, so the light's
+    # northward component points at -y
+    az = np.radians(azimuth)
+    alt = np.radians(altitude)
+    lx = math.cos(alt) * math.sin(az)
+    ly = -math.cos(alt) * math.cos(az)
+    lz = math.sin(alt)
+
+    norm = np.sqrt(gx * gx + gy * gy + 1.0)
+    shade = (-gx * lx - gy * ly + lz) / norm
+    np.clip(shade, 0.0, 1.0, out=shade)
+
+    if elevation_mix > 0.0:
+        lo, hi = np.percentile(z[valid], (2.0, 98.0))
+        if hi > lo:
+            elevation = np.clip((z - lo) / (hi - lo), 0.0, 1.0)
+        else:
+            elevation = np.zeros_like(z)
+        shade = (1.0 - elevation_mix) * shade + elevation_mix * elevation
+
+    # a pixel with a valid elevation but a nodata neighbour has no gradient, so its shade is
+    # NaN; leave those unlit rather than letting the cast produce noise
+    shade = np.nan_to_num(shade, nan=0.0, posinf=0.0, neginf=0.0)
+
+    grey = np.zeros((h, w), dtype=np.uint8)
+    np.multiply(shade, 255.0, out=shade)
+    np.clip(shade, 0.0, 255.0, out=shade)
+    grey[valid] = shade[valid].astype(np.uint8)
+
+    img = np.zeros([h, w, 3], dtype=np.uint8)
+    img[:, :, 0] = grey
+    img[:, :, 1] = grey
+    img[:, :, 2] = grey
+
+    return rgbToQImage(img)
+
+
 def floatmapToQImage(floatmap, nodata = float('NaN')):
 
     h = floatmap.shape[0]
