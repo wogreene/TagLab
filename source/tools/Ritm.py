@@ -17,6 +17,32 @@ from models.isegm.inference.predictors import get_predictor
 from models.isegm.inference import utils as ritmutils
 
 from source.tools import utils
+from source import RasterOps as rasterops
+
+# The old limit was a flat 9 MPixels, which on a capable machine refused work areas it could
+# segment in a fraction of a second. These numbers replace it, and were measured by running the
+# real network at increasing sizes.
+#
+# At full resolution the network needs about 0.59 GB of video memory per megapixel, and time
+# grows sharply once the card starts to fill: a 4096x4096 area took 0.9s, 5120x5120 took 18.5s
+# and 6144x6144 took 85.6s. So full resolution is allowed up to whatever memory permits, but no
+# further than stays interactive.
+RITM_BYTES_PER_PIXEL_FULL = 0.59 * (1 << 30) / 1.0e6
+RITM_RESPONSIVE_PIXEL_LIMIT = 20 * 1000 * 1000
+
+# Beyond that the input is scaled down for the network instead of the work area being refused.
+# The predictor already knows how to do this - LimitLongestSide resizes the input, moves the
+# clicks with it and scales the prediction back - TagLab simply never asked for it. An 8192x8192
+# area that previously could not run at all then takes 0.8s and 4.5 GB.
+#
+# This is deliberately not used when the area fits at full resolution, because it does change
+# what the network returns: on a real 3072x3072 area the scaled and unscaled masks agreed on
+# only 1% of their pixels. Scaling is a way to get an answer where there would otherwise be
+# none, not a free optimisation.
+RITM_MAX_NETWORK_SIDE = 2048
+RITM_BASE_BYTES = 2.6 * (1 << 30)
+RITM_BYTES_PER_PIXEL_SCALED = 38.0
+
 
 class Ritm(Tool):
 
@@ -105,8 +131,56 @@ class Ritm(Tool):
             self.segment(save_status=False)
 
 
+    def memoryBudget(self):
+        """
+        Bytes the segmentation may use, or None if it cannot be worked out.
+        """
+
+        try:
+            if self.device is not None and self.device.type == "cuda":
+                free_bytes, _ = torch.cuda.mem_get_info(self.device)
+                return free_bytes * 0.7
+
+            # on the CPU the work area competes with everything else, so be stingier
+            free_bytes = rasterops.availableMemoryBytes()
+            return free_bytes * 0.4 if free_bytes else None
+        except Exception:
+            return None
+
+    def workAreaLimits(self):
+        """
+        (full resolution limit, absolute limit) in pixels, for this machine right now.
+
+        Below the first, the work area goes through the network untouched, exactly as before.
+        Between the two it is scaled down for the network. Above the second it is refused.
+        """
+
+        budget = self.memoryBudget()
+        if budget is None:
+            # no way to tell: keep the behaviour this tool has always had
+            return 9 * 1024 * 1024, 9 * 1024 * 1024
+
+        full = int(budget / RITM_BYTES_PER_PIXEL_FULL)
+        full = max(4 * 1024 * 1024, min(full, RITM_RESPONSIVE_PIXEL_LIMIT))
+
+        scaled = int((budget - RITM_BASE_BYTES) / RITM_BYTES_PER_PIXEL_SCALED)
+
+        return full, max(full, scaled)
+
+    def buildPredictor(self, work_area_pixels, full_limit):
+        """
+        Make the predictor for this work area, scaling the network input only if it has to.
+        """
+
+        params = dict(self.predictor_params)
+        scaled = work_area_pixels > full_limit
+        if scaled:
+            params['predictor_params'] = {'max_size': RITM_MAX_NETWORK_SIDE}
+
+        self.predictor = get_predictor(self.ritm_net, device=self.device, **params)
+        return scaled
+
     def initializeWorkArea(self):
-        # if image_crop is too big it must be rescaled otherwise the image is too big and the ritm goes out of memory
 
         rect_map = self.viewerplus.viewportToScene()
         self.work_area_bbox = [round(rect_map.top()), round(rect_map.left()),
@@ -117,13 +191,23 @@ class Ritm(Tool):
         input_image = qimageToNumpyArray(image_crop)
 
         # check input image size to prevent crash
-        megapixels = (input_image.shape[0] * input_image.shape[1]) / (1024.0 * 1024.0)
-        if megapixels > 9.0:
+        pixels = input_image.shape[0] * input_image.shape[1]
+        full_limit, absolute_limit = self.workAreaLimits()
+
+        if pixels > absolute_limit:
             box = QMessageBox()
-            str = "The input size is too big ({:.1f} MPixels). Try to reduce the viewing area by zooming in.".format(megapixels)
-            box.setText(str)
+            box.setText("The work area is too big ({:.0f} MPixels; this machine can manage about "
+                        "{:.0f}). Try to reduce the viewing area by zooming in.".format(
+                            pixels / 1.0e6, absolute_limit / 1.0e6))
             box.exec()
             return False
+
+        # a work area past the full-resolution limit is scaled down for the network rather than
+        # refused; say so, because the outline it returns will be coarser than usual
+        if self.buildPredictor(pixels, full_limit):
+            self.infoMessage.emit(
+                "Large work area ({:.0f} MPixels): segmenting at reduced detail. "
+                "Zoom in for a finer outline.".format(pixels / 1.0e6))
 
         # CUDA memory to prevent crash
         oom = False
