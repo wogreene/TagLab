@@ -4337,7 +4337,7 @@ class TagLab(QMainWindow):
 
             w = self.mapviewer.width()
             if self.activeviewer.thumb is None:
-                thumb = self.activeviewer.img_map.scaled(w, w, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                thumb = genutils.thumbnailFromQImage(self.activeviewer.img_map, w)
                 self.activeviewer.thumb = QPixmap.fromImage(thumb)
             self.mapviewer.setPixmap(self.activeviewer.thumb)
             self.mapviewer.setOpacity(0.5)

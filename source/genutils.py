@@ -193,6 +193,47 @@ def integerMapToQImage(int_map):
     return qimg
 
 
+def thumbnailFromQImage(image, max_size):
+    """
+    Small preview of a possibly enormous image, without copying the whole thing.
+
+    QImage.scaled() looks cheap but on an ARGB32 source it converts the entire image to
+    premultiplied form first: on a 37268x38950 orthomosaic that is a second 5.4 GB allocation,
+    which was the largest single spike left in loading a map. Point-sampling every nth pixel
+    first touches a small fraction of the image - and, when the pixels are backed by a scratch
+    file, only pages in that fraction - after which Qt only ever sees a small image.
+    """
+
+    if image is None or image.isNull():
+        return image
+
+    w = image.width()
+    h = image.height()
+
+    # sample down to a few times the requested size, then let Qt do the last step properly
+    step = max(1, min(w, h) // max(1, max_size * 3))
+
+    if step == 1:
+        return image.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    fmt = image.format()
+    if fmt not in (QImage.Format_RGB32, QImage.Format_ARGB32):
+        image = image.convertToFormat(QImage.Format_RGB32)
+        fmt = QImage.Format_RGB32
+
+    # constBits, never bits: the non-const one detaches the QImage, which on a gigapixel map
+    # is a full deep copy and exactly the allocation this function exists to avoid
+    stride = image.bytesPerLine() // 4
+    bits = image.constBits()
+    bits.setsize(image.height() * image.bytesPerLine())
+    rows = np.frombuffer(bits, np.uint8).reshape(h, stride, 4)
+
+    sampled = np.ascontiguousarray(rows[::step, 0:w:step, :])
+    small = QImage(sampled.data, sampled.shape[1], sampled.shape[0], sampled.shape[1] * 4, fmt)
+
+    return small.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation).copy()
+
+
 def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=None,
                               azimuth=315.0, altitude=45.0, elevation_mix=0.2):
     """
