@@ -4386,6 +4386,76 @@ class TagLab(QMainWindow):
     #     # Update the position of the message widget
     #     self.message_widget.move(self.x() + 200, self.y() + 200)
 
+    def offerReducedResolution(self, rgb_filename):
+        """
+        Offer to work from a reduced-resolution copy when a map will not comfortably fit in
+        memory. Returns the file to use, or None if the user cancelled.
+
+        A copy is written rather than the pixels being downscaled after loading, because the
+        copy carries a geotransform that matches its own pixels. Every pixel-to-world conversion
+        in TagLab - shapefile and DXF export, georeferenced label maps, DEM alignment, surface
+        area - then keeps working with no special cases, where downscaling in memory would leave
+        all of them silently wrong by the reduction factor.
+        """
+
+        size = rasterops.rasterSize(rgb_filename)
+        if size is None:
+            return rgb_filename
+        width, height = size
+
+        needed = rasterops.estimateLoadedBytes(width, height)
+        available = rasterops.availableMemoryBytes()
+        if available is None:
+            return rgb_filename
+
+        # leave room for everything else TagLab and the operating system are doing
+        budget = available * 0.6
+        factor = rasterops.suggestReductionFactor(width, height, budget)
+        if factor <= 1:
+            return rgb_filename
+
+        reduced_w, reduced_h = width // factor, height // factor
+        box = QMessageBox(self)
+        box.setWindowTitle(self.TAGLAB_VERSION)
+        box.setIcon(QMessageBox.Question)
+        box.setText("This map is %d x %d pixels and needs about %.1f GB of memory.\n"
+                    "Only about %.1f GB is free." % (width, height, needed / (1 << 30),
+                                                     available / (1 << 30)))
+        box.setInformativeText(
+            "TagLab can work from a copy reduced by %dx (%d x %d, about %.1f GB), which keeps its "
+            "georeferencing and so measures correctly - annotations will simply be drawn at the "
+            "lower resolution.\n\nLoading at full resolution may be very slow or run out of memory."
+            % (factor, reduced_w, reduced_h,
+               rasterops.estimateLoadedBytes(reduced_w, reduced_h) / (1 << 30)))
+        use_reduced = box.addButton("Use a reduced copy", QMessageBox.AcceptRole)
+        use_full = box.addButton("Load at full resolution", QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec()
+
+        if box.clickedButton() is use_full:
+            return rgb_filename
+        if box.clickedButton() is not use_reduced:
+            return None
+
+        base, ext = os.path.splitext(rgb_filename)
+        destination = base + "_reduced%dx" % factor + (ext if ext else ".tif")
+
+        if not os.path.exists(destination):
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                rasterops.createReducedResolutionCopy(rgb_filename, destination, factor)
+            except Exception as e:
+                QApplication.restoreOverrideCursor()
+                msgBox = QMessageBox()
+                msgBox.setWindowTitle(self.TAGLAB_VERSION)
+                msgBox.setText("Could not create the reduced copy, so the map was not added.\n\n"
+                               + str(e))
+                msgBox.exec()
+                return None
+            QApplication.restoreOverrideCursor()
+
+        return destination
+
         #REFACTOR
     @pyqtSlot()
     def setMapProperties(self):
@@ -4404,6 +4474,12 @@ class TagLab(QMainWindow):
             # set RGB map
             rgb_filename = dir.relativeFilePath(self.mapWidget.data['rgb_filename'])
             depth_filename = dir.relativeFilePath(self.mapWidget.data['depth_filename'])
+
+            reduced = self.offerReducedResolution(self.mapWidget.data['rgb_filename'])
+            if reduced is None:
+                return
+            if reduced != self.mapWidget.data['rgb_filename']:
+                rgb_filename = dir.relativeFilePath(reduced)
 
             image.addChannel(rgb_filename, "RGB")
 

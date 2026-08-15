@@ -2,6 +2,7 @@
 import numpy as np
 import json
 import math
+import os
 
 from osgeo import gdal, osr
 import osgeo.ogr as ogr
@@ -627,6 +628,107 @@ def saveGeorefLabelMap(label_map, georef_filename, working_area, out_name):
 # elevations in metres regardless of whether the horizontal CRS is projected, geographic or
 # absent, so metres is the default.
 DEM_Z_UNIT_TO_MM = 1000.0
+
+
+def rasterSize(filename):
+    """
+    (width, height) of a raster, or None if it cannot be opened.
+    """
+
+    try:
+        with rio.open(filename) as src:
+            return src.width, src.height
+    except Exception:
+        return None
+
+
+def estimateLoadedBytes(width, height):
+    """
+    Memory TagLab needs to hold a map of this size, at 4 bytes per pixel.
+    """
+
+    return width * height * 4
+
+
+def availableMemoryBytes():
+    """
+    Physical memory currently free, or None where it cannot be determined.
+    """
+
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.ullAvailPhys)
+            return None
+
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+
+    except Exception:
+        return None
+
+
+def suggestReductionFactor(width, height, budget_bytes):
+    """
+    Smallest power-of-two reduction that brings a map inside the given budget.
+
+    Returns 1 when it already fits, or when there is nothing to go on.
+    """
+
+    if not budget_bytes or budget_bytes <= 0:
+        return 1
+
+    factor = 1
+    while factor < 16 and estimateLoadedBytes(width // factor, height // factor) > budget_bytes:
+        factor *= 2
+
+    return factor
+
+
+def createReducedResolutionCopy(src_filename, dst_filename, factor):
+    """
+    Write a copy of a map reduced by an integer factor, and return its path.
+
+    The reduction is done as a new raster rather than by downscaling in memory, because the
+    georeferencing then stays truthful: the copy carries a transform that matches its own
+    pixels, so annotations, DEM alignment, surface area, shapefile and DXF export all keep
+    working against it with no special cases. Downscaling only the pixels in memory would leave
+    every pixel-to-world conversion in the program silently wrong by the reduction factor.
+
+    Where the source has overview pyramids - which a photogrammetry ortho normally does - GDAL
+    reads the reduction straight out of one instead of touching the full-resolution data.
+    """
+
+    if factor <= 1:
+        return src_filename
+
+    with rio.open(src_filename) as src:
+        width = max(1, src.width // factor)
+        height = max(1, src.height // factor)
+        compress = (src.profile.get("compress") or "deflate")
+        photometric = src.profile.get("photometric")
+
+    options = ["TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256",
+               "COMPRESS=" + str(compress).upper(), "BIGTIFF=IF_SAFER"]
+    if photometric and str(compress).lower() == "jpeg":
+        options.append("PHOTOMETRIC=" + str(photometric).upper())
+
+    gdal.UseExceptions()
+    gdal.Translate(dst_filename, src_filename, width=width, height=height,
+                   resampleAlg="average", creationOptions=options)
+
+    return dst_filename
 
 
 def readValidityMask(filename, max_size=8192, shrink=True):
