@@ -653,6 +653,10 @@ def estimateLoadedBytes(width, height):
 def availableMemoryBytes():
     """
     Physical memory currently free, or None where it cannot be determined.
+
+    Linux reports this directly. macOS does not define SC_AVPHYS_PAGES, so there the total is
+    read instead and a conservative share of it assumed - erring low, since the consequence is
+    only that a reduced copy is offered slightly more readily than it needs to be.
     """
 
     try:
@@ -673,7 +677,17 @@ def availableMemoryBytes():
                 return int(status.ullAvailPhys)
             return None
 
-        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+        names = getattr(os, "sysconf_names", {})
+        page_size = os.sysconf("SC_PAGE_SIZE")
+
+        if "SC_AVPHYS_PAGES" in names:
+            return os.sysconf("SC_AVPHYS_PAGES") * page_size
+
+        if "SC_PHYS_PAGES" in names:
+            # macOS: only the total is available, so assume a share of it is free
+            return int(os.sysconf("SC_PHYS_PAGES") * page_size * 0.5)
+
+        return None
 
     except Exception:
         return None

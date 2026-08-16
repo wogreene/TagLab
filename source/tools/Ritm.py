@@ -28,7 +28,22 @@ from source import RasterOps as rasterops
 # and 6144x6144 took 85.6s. So full resolution is allowed up to whatever memory permits, but no
 # further than stays interactive.
 RITM_BYTES_PER_PIXEL_FULL = 0.59 * (1 << 30) / 1.0e6
-RITM_RESPONSIVE_PIXEL_LIMIT = 20 * 1000 * 1000
+RITM_RESPONSIVE_PIXEL_LIMIT_GPU = 20 * 1000 * 1000
+
+# Without a GPU the limit is time, not memory. Measured on 24 CPU threads, a first click took
+# 1.2s at 1 MPixel, 4.8s at 4.2 and 12.1s at 9.4; a laptop with a quarter of the threads is
+# several times slower again. Memory would allow far more than that on a large machine, so the
+# full-resolution limit on the CPU stays where this tool has always had it and only the scaled
+# path below extends what can be attempted. Note that TagLab only ever looks for CUDA, so a Mac
+# takes this path whatever hardware it has.
+RITM_RESPONSIVE_PIXEL_LIMIT_CPU = 9 * 1024 * 1024
+
+# The scaled path holds its time well even without a GPU, because the network sees a fixed size
+# whatever the work area: 4.9s at 16.8 MPixels, 4.8s at 67 and 8.4s at 151, on 24 threads. Past
+# that the cost of moving the work area into a tensor starts to tell, and on a laptop with a
+# third of the threads it would be a minute or more, so the CPU stops here and asks the user to
+# zoom in rather than appearing to hang.
+RITM_SCALED_PIXEL_LIMIT_CPU = 150 * 1000 * 1000
 
 # Beyond that the input is scaled down for the network instead of the work area being refused.
 # The predictor already knows how to do this - LimitLongestSide resizes the input, moves the
@@ -155,15 +170,20 @@ class Ritm(Tool):
         Between the two it is scaled down for the network. Above the second it is refused.
         """
 
+        on_gpu = self.device is not None and self.device.type == "cuda"
+        responsive = RITM_RESPONSIVE_PIXEL_LIMIT_GPU if on_gpu else RITM_RESPONSIVE_PIXEL_LIMIT_CPU
+
         budget = self.memoryBudget()
         if budget is None:
-            # no way to tell: keep the behaviour this tool has always had
-            return 9 * 1024 * 1024, 9 * 1024 * 1024
+            # no way to tell how much room there is: keep this tool's long-standing behaviour
+            return responsive, responsive
 
         full = int(budget / RITM_BYTES_PER_PIXEL_FULL)
-        full = max(4 * 1024 * 1024, min(full, RITM_RESPONSIVE_PIXEL_LIMIT))
+        full = max(4 * 1024 * 1024, min(full, responsive))
 
         scaled = int((budget - RITM_BASE_BYTES) / RITM_BYTES_PER_PIXEL_SCALED)
+        if not on_gpu:
+            scaled = min(scaled, RITM_SCALED_PIXEL_LIMIT_CPU)
 
         return full, max(full, scaled)
 
