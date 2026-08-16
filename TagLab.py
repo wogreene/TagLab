@@ -20,6 +20,12 @@
 
 import sys
 import os
+
+# Albumentations phones home for a version check on import and prints a notice when it finds a
+# newer release. TagLab pins its own dependencies through install.py, so the notice is noise and
+# the check is a network round trip on every startup. Set before anything imports it.
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+
 import datetime
 import shutil
 import json

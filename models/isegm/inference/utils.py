@@ -19,7 +19,10 @@ def get_time_metrics(all_ious, elapsed_time):
 
 def load_is_model(checkpoint, device, **kwargs):
     if isinstance(checkpoint, (str, Path)):
-        state_dict = torch.load(checkpoint, map_location='cpu')
+        # weights_only is passed explicitly: it defaults to False today but PyTorch warns that
+        # the default will flip, and these checkpoints hold more than plain tensors. The other
+        # torch.load calls in TagLab already say so; this one was missed.
+        state_dict = torch.load(checkpoint, map_location='cpu', weights_only=False)
     else:
         state_dict = checkpoint
 

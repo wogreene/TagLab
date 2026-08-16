@@ -62,7 +62,9 @@ class DistMaps(nn.Module):
             row_array = torch.arange(start=0, end=rows, step=1, dtype=torch.float32, device=points.device)
             col_array = torch.arange(start=0, end=cols, step=1, dtype=torch.float32, device=points.device)
 
-            coord_rows, coord_cols = torch.meshgrid(row_array, col_array)
+            # indexing is stated explicitly: 'ij' is what the argument-less call has always
+            # meant, and PyTorch warns on every prediction that it will stop defaulting to it
+            coord_rows, coord_cols = torch.meshgrid(row_array, col_array, indexing='ij')
             coords = torch.stack((coord_rows, coord_cols), dim=0).unsqueeze(0).repeat(points.size(0), 1, 1, 1)
 
             add_xy = (points * self.spatial_scale).view(points.size(0), points.size(1), 1, 1)

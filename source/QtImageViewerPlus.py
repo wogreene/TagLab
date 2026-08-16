@@ -695,19 +695,17 @@ class QtImageViewerPlus(QtImageViewer):
 
         # if the graphics item has just been create we remove it to set it again
         if annpoint.cross1_gitem is not None:
-            self.scene.removeItem(annpoint.cross1_gitem)
-            self.scene.removeItem(annpoint.cross2_gitem)
-            self.scene.removeItem(annpoint.ellipse_gitem)
-            self.scene.removeItem(annpoint.id_item)
+            self.removeFromScene(annpoint.cross1_gitem)
+            self.removeFromScene(annpoint.cross2_gitem)
+            self.removeFromScene(annpoint.ellipse_gitem)
+            self.removeFromScene(annpoint.id_item)
 
-            del annpoint.cross1_gitem
             annpoint.cross1_gitem = None
-
-            del annpoint.cross2_gitem
             annpoint.cross2_gitem = None
-
-            del annpoint.ellipse_gitem
             annpoint.ellipse_gitem = None
+            # id_item is recreated below like the others, so clear it too rather than leaving a
+            # stale one behind
+            annpoint.id_item = None
 
         #choose a pen
         pen = self.annpoints_pen_selected if annpoint in self.selected_annpoints else self.annpoints_pen
@@ -838,12 +836,24 @@ class QtImageViewerPlus(QtImageViewer):
         if redraw:
             self.scene.invalidate()
 
+    def removeFromScene(self, item):
+        """
+        Remove a graphics item, tolerating one that was never drawn.
+
+        Qt prints "QGraphicsScene::removeItem: cannot remove 0-item" when handed nothing, so a
+        point that has not been drawn - or is being undrawn twice - produced four of those on
+        the console for every call.
+        """
+
+        if item is not None:
+            self.scene.removeItem(item)
+
     def undrawAnnPoint(self, annpoint, redraw=True):
 
-        self.scene.removeItem(annpoint.cross1_gitem)
-        self.scene.removeItem(annpoint.cross2_gitem)
-        self.scene.removeItem(annpoint.ellipse_gitem)
-        self.scene.removeItem(annpoint.id_item)
+        self.removeFromScene(annpoint.cross1_gitem)
+        self.removeFromScene(annpoint.cross2_gitem)
+        self.removeFromScene(annpoint.ellipse_gitem)
+        self.removeFromScene(annpoint.id_item)
         annpoint.cross1_gitem = None
         annpoint.cross2_gitem = None
         annpoint.ellipse_gitem = None
