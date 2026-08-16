@@ -157,7 +157,14 @@ class FourClicks(Tool):
             outputs = outputs.to(torch.device('cpu'))
 
             pred = np.transpose(outputs.data.numpy()[0, ...], (1, 2, 0))
-            pred = 1 / (1 + np.exp(-pred))
+            # A confidently negative logit makes exp(-pred) overflow to infinity, and numpy
+            # warns about it on every segmentation. The result is right regardless - 1/inf is
+            # 0.0, which is the value the sigmoid tends to - so the overflow is ignored rather
+            # than the arithmetic changed. scipy's expit would avoid it too, but it rounds
+            # differently in the last bit, and that flips about one thresholded pixel in 80
+            # million; not worth altering results anyone has already published.
+            with np.errstate(over='ignore'):
+                pred = 1 / (1 + np.exp(-pred))
             pred = np.squeeze(pred)
 
             result = helpers.crop2fullmask(pred, bbox, im_size=img.shape[:2], zero_pad=True, relax=pad) > thres
@@ -195,8 +202,11 @@ class FourClicks(Tool):
             self.deepextreme_net = resnet.resnet101(1, nInputChannels=4, classifier='psp')
 
             # dictionary layers' names - weights
+            # weights_only stated explicitly: it is the current default, but PyTorch warns that
+            # the default will flip and these checkpoints hold more than plain tensors
             state_dict_checkpoint = torch.load(os.path.join(models_dir, modelName + '.pth'),
-                                               map_location=lambda storage, loc: storage)
+                                               map_location=lambda storage, loc: storage,
+                                               weights_only=False)
 
             # Remove the prefix .module from the model when it is trained using DataParallel
             if 'module.' in list(state_dict_checkpoint.keys())[0]:

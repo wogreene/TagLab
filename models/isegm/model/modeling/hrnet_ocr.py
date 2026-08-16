@@ -406,7 +406,8 @@ class HighResolutionNet(nn.Module):
                   'You can download the weights for HRNet from the repository:\n'
                   'https://github.com/HRNet/HRNet-Image-Classification')
             exit(1)
-        pretrained_dict = torch.load(pretrained_path, map_location={'cuda:0': 'cpu'})
+        pretrained_dict = torch.load(pretrained_path, map_location={'cuda:0': 'cpu'},
+                                     weights_only=False)
         pretrained_dict = {k.replace('last_layer', 'aux_head').replace('model.', ''): v for k, v in
                            pretrained_dict.items()}
 

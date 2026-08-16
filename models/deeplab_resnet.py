@@ -259,7 +259,8 @@ def Res_Deeplab(n_classes=21, pretrained=False):
         pth_model = 'MS_DeepLab_resnet_trained_VOC.pth'
         models_dir = "deepextreme/"
         saved_state_dict = torch.load(os.path.join(models_dir, pth_model),
-                                      map_location=lambda storage, loc: storage)
+                                      map_location=lambda storage, loc: storage,
+                                      weights_only=False)
         if n_classes != 21:
             for i in saved_state_dict:
                 i_parts = i.split('.')

@@ -191,8 +191,8 @@ class TagLab(QMainWindow):
 
         # LOAD CONFIGURATION FILE
 
-        f = open(os.path.join(self.taglab_dir, "config.json"), "r")
-        config_dict = json.load(f)
+        with open(os.path.join(self.taglab_dir, "config.json"), "r") as f:
+            config_dict = json.load(f)
         self.available_classifiers = config_dict["Available Classifiers"]
 
         logfile.info("[INFO] Initizialization begins..")
@@ -835,8 +835,8 @@ class TagLab(QMainWindow):
 
         # read offline version
         taglab_version_file = os.path.join(os.path.dirname(__file__), "TAGLAB_VERSION")
-        f_off_version = open(taglab_version_file, "r")
-        taglab_offline_version = f_off_version.read()
+        with open(taglab_version_file, "r") as f_off_version:
+            taglab_offline_version = f_off_version.read()
 
         if not CHECK_FOR_UPDATES:
             return taglab_offline_version, False
