@@ -234,22 +234,52 @@ def thumbnailFromQImage(image, max_size):
     return small.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation).copy()
 
 
-def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=None,
-                              azimuth=315.0, altitude=45.0, elevation_mix=0.2):
-    """
-    Render a DEM as shaded relief.
+# Depth ramp for the DEM view, matching the one Metashape draws: deep water blue, running up
+# through cyan and green to yellow and red at the shallowest. Stops are (position, R, G, B).
+DEPTH_RAMP_STOPS = [
+    (0.00, 40, 40, 160),      # deepest, dark blue
+    (0.15, 30, 90, 220),
+    (0.35, 40, 200, 220),     # cyan
+    (0.55, 70, 200, 70),      # green
+    (0.75, 240, 220, 60),     # yellow
+    (0.90, 235, 140, 40),     # orange
+    (1.00, 210, 40, 40),      # shallowest, red
+]
 
-    A plain min/max grey ramp is nearly useless on a reef DEM: the raster spans metres of depth
-    while the structure worth seeing is centimetres, so the interesting detail lands inside one
-    or two grey levels. Hillshade responds to the *local* gradient instead, which is exactly the
-    signal that the global stretch throws away.
+
+def depthRampLookupTable():
+    """
+    256-entry RGB table for the depth ramp, interpolated between DEPTH_RAMP_STOPS.
+    """
+
+    positions = np.array([s[0] for s in DEPTH_RAMP_STOPS], dtype=np.float32)
+    colours = np.array([s[1:] for s in DEPTH_RAMP_STOPS], dtype=np.float32)
+
+    x = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+    lut = np.zeros((256, 3), dtype=np.uint8)
+    for channel in range(3):
+        lut[:, channel] = np.interp(x, positions, colours[:, channel]).astype(np.uint8)
+
+    return lut
+
+
+def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=None,
+                              azimuth=315.0, altitude=45.0, ambient=0.35):
+    """
+    Render a DEM the way Metashape does: depth as colour, with hillshade relief over the top.
+
+    Colour alone cannot show structure on a reef DEM, because the raster spans metres of depth
+    while the detail worth seeing is centimetres, so a whole colony occupies a sliver of the
+    ramp. Hillshade responds to the *local* gradient, which is exactly what the depth ramp
+    cannot express. Together they read as the surface does in Metashape: the ramp says how deep,
+    the shading says what shape.
 
     px_x and px_y are the ground size of a pixel in the same unit as the elevations. When they
     are not known (an unreferenced DEM) the gradients are normalised by a robust percentile of
     their own magnitude, which keeps the shading legible whatever the units happen to be.
 
-    elevation_mix blends a little of the (percentile-stretched) depth back in, so the image
-    still reads as deeper/shallower rather than as pure texture. Nodata is left black.
+    ambient is how much colour survives in full shadow; at 0 the unlit faces go black and the
+    depth becomes unreadable there. Nodata is left black.
     """
 
     h = floatmap.shape[0]
@@ -288,27 +318,25 @@ def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=Non
     shade = (-gx * lx - gy * ly + lz) / norm
     np.clip(shade, 0.0, 1.0, out=shade)
 
-    if elevation_mix > 0.0:
-        lo, hi = np.percentile(z[valid], (2.0, 98.0))
-        if hi > lo:
-            elevation = np.clip((z - lo) / (hi - lo), 0.0, 1.0)
-        else:
-            elevation = np.zeros_like(z)
-        shade = (1.0 - elevation_mix) * shade + elevation_mix * elevation
-
     # a pixel with a valid elevation but a nodata neighbour has no gradient, so its shade is
-    # NaN; leave those unlit rather than letting the cast produce noise
-    shade = np.nan_to_num(shade, nan=0.0, posinf=0.0, neginf=0.0)
+    # NaN; light those flatly rather than letting them punch black holes along the edge
+    shade = np.nan_to_num(shade, nan=1.0, posinf=1.0, neginf=1.0)
 
-    grey = np.zeros((h, w), dtype=np.uint8)
-    np.multiply(shade, 255.0, out=shade)
-    np.clip(shade, 0.0, 255.0, out=shade)
-    grey[valid] = shade[valid].astype(np.uint8)
+    # depth to colour, over the middle 96% so that a single spike cannot flatten the ramp
+    lo, hi = np.percentile(z[valid], (2.0, 98.0))
+    index = np.zeros((h, w), dtype=np.uint8)
+    if hi > lo:
+        scaled = (z - lo) * (255.0 / (hi - lo))
+        np.clip(scaled, 0.0, 255.0, out=scaled)
+        index[valid] = scaled[valid].astype(np.uint8)
 
-    img = np.zeros([h, w, 3], dtype=np.uint8)
-    img[:, :, 0] = grey
-    img[:, :, 1] = grey
-    img[:, :, 2] = grey
+    img = depthRampLookupTable()[index]
+
+    # relief over the top, kept away from zero so colour still reads on unlit faces
+    shade = ambient + (1.0 - ambient) * shade
+    img = (img * shade[:, :, np.newaxis]).astype(np.uint8)
+
+    img[~valid] = 0
 
     return rgbToQImage(img)
 
