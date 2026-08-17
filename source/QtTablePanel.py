@@ -60,6 +60,17 @@ class TableModel(QAbstractTableModel):
         self._data = data
         self.surface_area_mode_enabled = False
 
+    # measurements, shown to one decimal and left blank rather than reading zero
+    MEASUREMENT_COLUMNS = ("Area", "Surf. area")
+    IDENTIFIER_COLUMNS = ("Id", "Blob")
+
+    def columnName(self, section):
+
+        try:
+            return str(self._data.columns[section])
+        except (IndexError, AttributeError):
+            return ""
+
     def data(self, index, role):
         if role == Qt.TextAlignmentRole:
             if index.column() < 5:
@@ -70,25 +81,31 @@ class TableModel(QAbstractTableModel):
 
         value = self._data.iloc[index.row(), index.column()]
 
+        # by name rather than by position: the columns have been added to before and
+        # a formatting rule pinned to a number lands on whatever moves into that slot
+        name = self.columnName(index.column())
+
         if role == Qt.DisplayRole:
 
-            if index.column() == 0:
-                if int(value) < 0:
-                    return ""
+            if name in self.IDENTIFIER_COLUMNS and int(value) < 0:
+                return ""
 
-            # format floating point values
-            if index.column() == 3 or index.column() == 4:
-                txt = "{:.1f}".format(value) if value > 0 else ""
-            else:
-                txt = str(value)
+            if name in self.MEASUREMENT_COLUMNS:
+                return "{:.1f}".format(value) if value > 0 else ""
 
-            return txt
-        
+            return str(value)
+
         if role == Qt.UserRole:
-            if index.column() == 2 or index.column() == 1:
-                return str(value)
 
-            return float(value)
+            if name in self.IDENTIFIER_COLUMNS or name in self.MEASUREMENT_COLUMNS:
+                return float(value)
+
+            if name == "Group":
+                # a group key is a number kept as text so that an ungrouped region can
+                # show nothing; sort it as the number it is, with the blanks together
+                return float(value) if value != "" else -1.0
+
+            return str(value)
 
     def setData(self, index, value, role):
 
