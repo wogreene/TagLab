@@ -6038,6 +6038,10 @@ class TagLab(QMainWindow):
         Load a previously saved projects.
         """
 
+        # opening a project replaces the current one, so settle it first
+        if not self.offerToSaveChanges():
+            return
+
         self.resetAll()
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
