@@ -216,8 +216,9 @@ em {
 <li>TagLab supports <b>.jpg</b>, <b>.png</b> and <b>.tif</b>/<b>.tiff</b> RGB images, including GeoTIFFs with JPEG
 or other GDAL-supported compression. There is no fixed maximum size: the map is held in memory uncompressed at
 4 bytes per pixel, so a 40000x40000 ortho needs about 6.5 GB of RAM and a 60000x60000 one about 15 GB.</li>
-<li>Exporting a training dataset still rasterizes the labels with Qt, which cannot paint past 32767 pixels. For
-larger maps, define a working area within that limit and export it.</li>
+<li>Exporting a training dataset works at any map size. Only the optional tile preview is drawn with Qt, which
+cannot paint past 32767 pixels, so on a larger export area the preview is skipped and the tiles are written
+as usual.</li>
 <li>The loading of a <b>.tiff</b> file with the DEM is not mandatory. </li>
 </ul> 
 
