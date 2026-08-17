@@ -144,6 +144,10 @@ class TableModel(QAbstractTableModel):
                 head = str(self._data.columns[section])
                 if head == "Visibility" or head == "Color":
                     return " "
+                # the word is wider than the numbers beneath it and was setting the
+                # width of the column on its own, at the expense of the class names
+                if head == "Coverage":
+                    return "Cov."
                 return head
 
             if orientation == Qt.Vertical:
@@ -273,15 +277,34 @@ height: 0px;
             self.data_table.setVisible(True)
             self.data_table.setEditTriggers(QAbstractItemView.DoubleClicked)
 
-            self.data_table.horizontalHeader().setMinimumSectionSize(10)
-            self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-            self.data_table.setColumnWidth(0, 25)
-            self.data_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
-            self.data_table.setColumnWidth(1, 25)
-            self.data_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-            self.data_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-            self.data_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-            self.data_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+            # The class name is what this panel is read for, so it gets whatever room
+            # is left rather than the leftovers. Sizing the counts and the coverage to
+            # their contents let them take as much as they liked, and in a docked
+            # panel that squeezed the names down to a few characters.
+            header = self.data_table.horizontalHeader()
+            metrics = header.fontMetrics()
+
+            def column(index, mode, width):
+                header.setSectionResizeMode(index, mode)
+                self.data_table.setColumnWidth(index, int(width))
+
+            # measured from the header font, so the panel holds together at any font
+            # size or display scaling rather than at this one only
+            padding = metrics.horizontalAdvance("n")
+            icon = metrics.height()
+
+            header.setMinimumSectionSize(10)
+
+            # the two icons are what they are, and the class name takes the rest
+            column(0, QHeaderView.Fixed, icon * 1.3)                    # visibility
+            column(1, QHeaderView.Fixed, icon)                          # colour
+            header.setSectionResizeMode(2, QHeaderView.Stretch)         # class name
+
+            # sized for the numbers rather than to their contents, but left draggable
+            # so an unusually long coverage figure can still be read in full
+            column(3, QHeaderView.Interactive, metrics.horizontalAdvance("#R") + padding)
+            column(4, QHeaderView.Interactive, metrics.horizontalAdvance("#P") + padding)
+            column(5, QHeaderView.Interactive, metrics.horizontalAdvance("2685.0") + padding)
 
             # Update original row order when data changes
             self.original_row_order = list(range(self.model.rowCount(QModelIndex())))
