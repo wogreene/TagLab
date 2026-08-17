@@ -1,14 +1,14 @@
 # TagLab — Perry Institute fork: changes for upstream review
 
-Nineteen commits made while annotating coral reef photomosaics at the Perry Institute for Marine
-Science. Most are fixes and limit removals that are not specific to our workflow; a few are ours
-alone. This document sorts them so you can tell which is which.
+Twenty-four commits made while annotating coral reef photomosaics at the Perry Institute for
+Marine Science. Most are fixes and limit removals that are not specific to our workflow; a few are
+ours alone. This document sorts them so you can tell which is which.
 
 | | |
 |---|---|
 | **Forked at** | `0150d84`, 20 May 2026 — "first working version of the georeferencing tool" |
-| **Commits** | 19 (nothing of upstream `main` is missing from this fork) |
-| **Diff** | +2424 / −459 across 27 files |
+| **Commits** | 24, plus this document (nothing of upstream `main` is missing from this fork) |
+| **Diff** | +3288 / −514 across 30 files |
 | **New dependencies** | none — `requirements.txt` and `install.py` untouched |
 | **Repo** | `https://github.com/wogreene/TagLab`, branch `main` |
 
@@ -37,6 +37,11 @@ Each entry is labelled:
 | CPU-path limits for machines without CUDA | ADOPT | `1174ab6` |
 | Whole-map point sampling excluding nodata | ADOPT | `99af0da` |
 | Randomly placed, randomly angled working area | DISCUSS | `0cd7cd0` |
+| Merging separated regions produced a broken one | ADOPT | `d49bd16` |
+| Grouping pieces of one colony | DISCUSS | `d9e15c4` |
+| Data panel formatted by position, not by name | ADOPT | `5fd62a2` |
+| Labels panel column widths | ADOPT | `3b0f277` |
+| Labels panel icons undersized and left-aligned | ADOPT | `2fcd8b0` |
 | Keyboard labelling from the data table | ADOPT | `5f2f776` |
 | Save prompt only when something changed | ADOPT | `c74d13f` |
 | Ask before discarding unsaved work | ADOPT | `ae4379d` |
@@ -306,6 +311,143 @@ own frame, and the region and point filters use it.
 
 ---
 
+## Regions and colonies
+
+### Merging separated regions produced a broken region — ADOPT (`d49bd16`)
+
+**Upstream:** `Annotation.union` paints the selected masks into one array and rebuilds a blob from
+it. It returns `None` only when that mask is entirely empty, so the `"blobs are separated"` branch
+below it cannot be reached — and it has no message attached in any case.
+
+The merge does not refuse separated regions. It accepts them and corrupts the result. A blob
+carries a single outer contour, so `createContourFromMask` keeps whichever piece has the largest
+bounding box and files the rest as *inner* contours — holes lying outside the contour they are
+holes in. The area is measured from the mask and so counts every piece, leaving a region whose
+stated area is larger than the geometry anyone reads back.
+
+| Merging a 60×60 and a 40×40 region 300 px apart | |
+|---|---|
+| Reported area | 5200 |
+| Area enclosed by the contour | 3600 |
+| Bounding box | covers only the first piece |
+| Centroid | open water, between the two |
+| With three pieces | 22% of the region missing from the geometry, area still whole |
+
+`union` now returns `None` when the painted mask is more than one connected piece, and says so.
+
+Connectivity is edge-wise rather than corner-wise. Two regions meeting at a single corner are one
+piece by the looser rule, but the contour tracer still walks them as two rings — allowing them
+reproduced exactly the same broken result, measured, before settling on the stricter rule.
+Overlapping regions, regions sharing an edge and runs of several touching regions all still merge,
+and a region with a hole keeps it: the two halves of a holed square merge to area 3200, contour
+mask 3200, one inner contour.
+
+This one is worth taking regardless of anything else here.
+
+### Grouping pieces of one colony — DISCUSS (`d9e15c4`)
+
+A colony often branches or buds into pieces that do not touch, and each piece is its own region
+with no way to say they are one coral. Across timepoints the genet covers this, being the connected
+components of the correspondence graph; a single-timepoint project has no correspondences, so every
+region stands alone.
+
+Group is the missing half of that same idea rather than a second one. `Blob.group` holds a key
+shared by pieces of one colony within a map, and `updateGenets` seeds its union-find with those
+links alongside the correspondences, so a colony reads as one genet whether its pieces were related
+across time or within a single map. Select the pieces and press `G`; `shift+G` takes them out
+again.
+
+Three decisions worth your scrutiny:
+
+- **The link is saved, not the genet.** Genet ids are positional — recomputed on load and
+  renumbered whenever the set of regions changes. We measured this: deleting one colony from a
+  two-timepoint project renumbered 7 of the 9 survivors, and `genet 4` came to mean a different
+  colony than it had before. So a genet id cannot carry a grouping.
+- **The key is the lowest member id, chosen once and then left alone.** `getFreeId` hands out the
+  lowest unused id, so ids are recycled after a deletion; a key that recomputed itself would
+  eventually be claimed by an unrelated region that inherited the id. That case is checked for and
+  tested.
+- **The isolate count is not stored.** It is the number of members a genet has in a map, counted at
+  export, so it cannot fall out of step with the regions the way a saved integer would. It appears
+  per map in the genet CSV next to the class, id and area already there.
+
+We considered instead making a blob multipart, so that separated pieces could genuinely merge into
+one region. We think that is the wrong trade: it would mean reworking the contour representation
+and everything reading it, the edit tools would collapse a multipart region back to one piece on
+the next edit, and it destroys the per-piece areas that a colony-level analysis can always derive
+but never recover.
+
+Pieces of one colony cannot be two species, so grouping settles the class. Unclassed pieces take
+the class of the classed ones with no prompt; where genuinely different classes meet, the choice is
+put to the user, restricted to the classes actually present, and cancelling changes nothing.
+
+> **Note the keybinding.** `G` toggled the grid; that moves to `Ctrl+G`. And `Blob.group` is a new
+> saved field — absent in older projects, which read as ungrouped, but projects written by this
+> build carry it.
+
+Also in this commit: the genet CSV was written without `newline=''`, putting a blank line after
+every row on Windows.
+
+---
+
+## Panels
+
+### The data panel formatted cells by position — ADOPT (`5fd62a2`)
+
+**Upstream:** the table model formats by column index — column 0 is the id, 3 and 4 are
+measurements.
+
+Adding a column to that table shifts every column after it into someone else's formatting rule.
+Inserting Group at position 1 moved `Class` into a slot that formats floats, and drawing the first
+row raised `TypeError: '>' not supported between instances of 'str' and 'int'`. The lookup is now
+by column name, so a rule travels with its column.
+
+We hit this because of our own change, but the fragility is upstream's and the next column added
+would hit it too.
+
+### The labels panel gave its space to the coverage — ADOPT (`3b0f277`)
+
+The counts and the coverage were sized to their contents, which let them take whatever they asked
+for and left the class name whatever remained. In a docked panel that came to 68 px of 469, so
+class names read `"Unknow..."` while the coverage had 149 px for a six-digit number.
+
+| Column | Before | After |
+|---|---|---|
+| Visibility | 25 px | 35 px |
+| Class | 68 px | 197 px |
+| #R / #P | 66 / 67 px | 49 / 50 px |
+| Coverage | 149 px | 102 px |
+
+The heading `"Coverage"` is wider than any figure beneath it and was setting the column width on
+its own, so it is displayed as `"Cov."` — the column in the table keeps its name. The three numeric
+columns are draggable rather than fixed, so an unusually long figure can still be widened to read
+in full. Widths come from the header font rather than being written in pixels, so a different font
+size or display scaling moves them together.
+
+### The labels panel icons were undersized and left-aligned — ADOPT (`2fcd8b0`)
+
+Two separate causes, neither of them the column width.
+
+The icon files are mostly empty space: the eye is drawn across 46% of the width of its canvas and
+32% of the height, the cross across 26% of each. Scaling the canvas to a given size therefore draws
+a mark far smaller than that, and draws the two at visibly different sizes — the cross about half
+the eye. Both are now cropped to their opaque bounding box before being scaled, measured from the
+alpha channel rather than written down.
+
+The size was a literal 20 px, which is small on a display rendering text at 34 px. It now follows
+the header font like the column widths. Together these take the eye from 9 px of visible ink to 20,
+and the cross from 5 px to 20, the two now matching.
+
+Centring needs a delegate: `TextAlignmentRole` aligns the text of a cell and not its icon, so both
+icons sat against the left edge whatever the alignment said. The delegate lets the style draw the
+cell as usual, selection and all, with the icon suppressed, then places the icon in the middle of
+it.
+
+Also stops handing back a pixmap with a live `QPainter` still attached to it, which the old drawing
+code did on every repaint.
+
+---
+
 ## Workflow and correctness
 
 ### Labelling a list of points from the keyboard — ADOPT (`5f2f776`)
@@ -408,6 +550,10 @@ leftovers. It also drops the `distutils` import, which is gone in Python 3.12.
   synthetic geometry of known area. These are not committed as tests; they were built per change.
 - **One platform.** Everything was exercised on Windows 11 with a CUDA GPU. The macOS and CPU-only
   paths were reasoned about and their timings measured on CPU here, but not run on Mac hardware.
+- **The interface changes were measured, not looked at.** Column widths were read back from the
+  header, and the icons were checked by rendering the cells and finding where the ink landed. That
+  catches a mis-sized or off-centre element but not one that is merely ugly, and the display it was
+  measured on renders text at 34 px, so the proportions are worth a glance on an ordinary one.
 - **The Qt paint limit still exists** for the dataset export's tile preview, which is skipped with a
   message past 32767 px. Everything else on that path is free of it.
 - **Rotated working areas are exact for counts, approximate for raster crops**, as described above.
