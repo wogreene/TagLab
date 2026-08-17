@@ -20,8 +20,9 @@ from PyQt5.QtCore import Qt, QAbstractTableModel, QItemSelectionModel, QSortFilt
     pyqtSlot, pyqtSignal, QEvent
 from PyQt5.QtWidgets import QWidget, QSizePolicy, QComboBox, QLabel, QTableView, QHeaderView, \
     QHBoxLayout, QVBoxLayout, QAbstractItemView, QStyledItemDelegate, QAction, QMenu, QToolButton, QGridLayout, \
-    QLineEdit, QApplication, QLineEdit, QWidget, QSizePolicy, QPushButton
-from PyQt5.QtGui import QIcon, QColor, QPixmap, QPainter
+    QLineEdit, QApplication, QLineEdit, QWidget, QSizePolicy, QPushButton, QStyle, \
+    QStyleOptionViewItem
+from PyQt5.QtGui import QIcon, QColor, QPixmap, QPainter, QRegion
 from pathlib import Path
 import os
 from source.Point import Point
@@ -38,8 +39,46 @@ class TableModel(QAbstractTableModel):
         self._data = data
 
         # load icons
-        self.icon_eyeopen = QPixmap(os.path.join(imdir, os.path.join("icons", "eye.png")))
-        self.icon_eyeclosed = QPixmap(os.path.join(imdir, os.path.join("icons", "cross.png")))
+        self.icon_eyeopen = self.trimmed(
+            QPixmap(os.path.join(imdir, os.path.join("icons", "eye.png"))))
+        self.icon_eyeclosed = self.trimmed(
+            QPixmap(os.path.join(imdir, os.path.join("icons", "cross.png"))))
+
+        self.icon_size = 20
+        self.scaled_eyeopen = None
+        self.scaled_eyeclosed = None
+        self.setIconSize(self.icon_size)
+
+    def trimmed(self, pixmap):
+        """
+        The icon files are mostly empty space - the eye is drawn across under half the
+        width of its canvas and the cross barely a quarter - so scaling the canvas to
+        the size asked for leaves a much smaller mark than that, and leaves the two of
+        them at visibly different sizes. Crop to what is actually drawn.
+        """
+
+        mask = pixmap.mask()
+        if mask.isNull():
+            return pixmap
+
+        bounds = QRegion(mask).boundingRect()
+        if bounds.isEmpty():
+            return pixmap
+
+        return pixmap.copy(bounds)
+
+    def setIconSize(self, size):
+        """
+        Draw the eye at a size that follows the text rather than at a fixed 20 px,
+        which is barely visible once the display is scaled up. Both sizes are scaled
+        once here: data() is asked for them on every repaint.
+        """
+
+        self.icon_size = max(16, int(size))
+        self.scaled_eyeopen = self.icon_eyeopen.scaled(
+            self.icon_size, self.icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.scaled_eyeclosed = self.icon_eyeclosed.scaled(
+            self.icon_size, self.icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
     def data(self, index, role):
 
@@ -57,24 +96,14 @@ class TableModel(QAbstractTableModel):
         if role == Qt.DecorationRole:
 
             if index.column() == 0:
-
-                if int(value) == 0:
-                    pxmap = QPixmap(20, 20)
-                    pxmap.fill(Qt.transparent)
-                    painter = QPainter(pxmap)
-                    painter.drawPixmap(0, 0, 20, 20, self.icon_eyeclosed)
-                else:
-                    pxmap = QPixmap(20, 20)
-                    pxmap.fill(Qt.transparent)
-                    painter = QPainter(pxmap)
-                    painter.drawPixmap(0, 0, 20, 20, self.icon_eyeopen)
-
-                return pxmap
+                # the scaled copies are returned directly; painting them into a fresh
+                # pixmap left a QPainter still attached to the one being handed back
+                return self.scaled_eyeclosed if int(value) == 0 else self.scaled_eyeopen
 
             if index.column() == 1:
                 value = value[1:-1]
                 value = value.split(",")
-                pxmap = QPixmap(20,20)
+                pxmap = QPixmap(self.icon_size, self.icon_size)
                 pxmap.fill(QColor(int(value[0]), int(value[1]), int(value[2])))
                 return pxmap
 
@@ -154,6 +183,37 @@ class TableModel(QAbstractTableModel):
                 return str(self._data.index[section])
 
 
+class CentredIconDelegate(QStyledItemDelegate):
+    """
+    Centres the eye and the colour swatch in their cells. The alignment given by
+    TextAlignmentRole applies to the text of a cell and not to its icon, which the
+    delegate places to the left however the text is set.
+    """
+
+    def paint(self, painter, option, index):
+
+        pixmap = index.data(Qt.DecorationRole)
+        if pixmap is None or pixmap.isNull():
+            super(CentredIconDelegate, self).paint(painter, option, index)
+            return
+
+        # let the style draw the cell as it normally would, selection and all, but
+        # without the icon, then place the icon in the middle of what it drew
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.icon = QIcon()
+        opt.features &= ~QStyleOptionViewItem.HasDecoration
+
+        widget = opt.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
+
+        painter.drawPixmap(
+            option.rect.x() + (option.rect.width() - pixmap.width()) // 2,
+            option.rect.y() + (option.rect.height() - pixmap.height()) // 2,
+            pixmap)
+
+
 class QtLabelSortFilter(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super(QtLabelSortFilter, self).__init__(parent)
@@ -204,6 +264,7 @@ height: 0px;
 
         self.model = None
         self.data = None
+        self.icon_delegate = CentredIconDelegate(self)
         self.original_row_order = None  # Store original order for restore functionality
 
         layout = QVBoxLayout()
@@ -295,9 +356,14 @@ height: 0px;
 
             header.setMinimumSectionSize(10)
 
-            # the two icons are what they are, and the class name takes the rest
-            column(0, QHeaderView.Fixed, icon * 1.3)                    # visibility
-            column(1, QHeaderView.Fixed, icon)                          # colour
+            # the eye follows the text size rather than sitting at a fixed 20 px
+            self.model.setIconSize(icon * 0.6)
+            self.data_table.setItemDelegateForColumn(0, self.icon_delegate)
+            self.data_table.setItemDelegateForColumn(1, self.icon_delegate)
+
+            # the two icons take what they need, and the class name takes the rest
+            column(0, QHeaderView.Fixed, self.model.icon_size + padding)   # visibility
+            column(1, QHeaderView.Fixed, self.model.icon_size + padding)   # colour
             header.setSectionResizeMode(2, QHeaderView.Stretch)         # class name
 
             # sized for the numbers rather than to their contents, but left draggable
