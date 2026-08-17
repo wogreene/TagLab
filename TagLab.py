@@ -1981,6 +1981,17 @@ class TagLab(QMainWindow):
             # MERGE OVERLAPPED BLOBS
             self.union()
 
+        elif event.key() == Qt.Key_G:
+            if event.modifiers() & Qt.ControlModifier:
+                # TOGGLE GRID
+                self.toggleGridFromKeyboard()
+            elif event.modifiers() & Qt.ShiftModifier:
+                # UNGROUP REGIONS
+                self.ungroupBlobs()
+            else:
+                # GROUP REGIONS AS PIECES OF ONE COLONY
+                self.groupBlobs()
+
         elif event.key() == Qt.Key_C:
             # TOGGLE RGB/DEPTH CHANNELS
             self.switch()
@@ -2086,17 +2097,6 @@ class TagLab(QMainWindow):
                 self.viewerplus.toggleIds(0)
                 self.viewerplus2.toggleIds(0)
                 self.checkBoxIds.setChecked(True)
-
-        elif event.key() == Qt.Key_G:
-            # toggle grid
-            if self.checkBoxGrid.isChecked():
-               self.viewerplus.toggleGrid(1)
-               self.viewerplus2.toggleGrid(1)
-               self.checkBoxGrid.setChecked(False)
-            else:
-                self.viewerplus.toggleGrid(0)
-                self.viewerplus2.toggleGrid(0)
-                self.checkBoxGrid.setChecked(True)
 
         elif event.key() == Qt.Key_Home:
             # ASSIGN LABEL
@@ -3213,6 +3213,128 @@ class TagLab(QMainWindow):
         view.saveUndo()
         view.resetSelection()
 
+
+    def resolveGroupClass(self, blobs):
+        """
+        Settle on one class for a set of regions about to be grouped, since pieces of
+        one colony are one colony and cannot be two species at once.
+
+        Regions left unclassed take the class of the ones that carry one, which is the
+        common case: pieces get outlined, one gets labelled, the rest follow. Where
+        genuinely different classes meet, the choice is the user's. Returns the class
+        to apply, or False if the user called it off.
+        """
+
+        named = []
+        for blob in blobs:
+            if blob.class_name and blob.class_name != "Empty" and blob.class_name not in named:
+                named.append(blob.class_name)
+
+        if len(named) == 0:
+            return None
+
+        if len(named) == 1:
+            return named[0]
+
+        box = QMessageBox(self)
+        box.setWindowTitle(self.TAGLAB_VERSION)
+        box.setText("These regions do not all have the same class. Pieces of one colony must "
+                    "share a class - which one applies?")
+        buttons = {}
+        for class_name in named:
+            buttons[box.addButton(class_name, QMessageBox.AcceptRole)] = class_name
+        cancel = box.addButton(QMessageBox.Cancel)
+        box.exec()
+
+        if box.clickedButton() is cancel:
+            return False
+
+        return buttons.get(box.clickedButton(), False)
+
+    def toggleGridFromKeyboard(self):
+
+        if self.checkBoxGrid.isChecked():
+            self.viewerplus.toggleGrid(1)
+            self.viewerplus2.toggleGrid(1)
+            self.checkBoxGrid.setChecked(False)
+        else:
+            self.viewerplus.toggleGrid(0)
+            self.viewerplus2.toggleGrid(0)
+            self.checkBoxGrid.setChecked(True)
+
+    @pyqtSlot()
+    def groupBlobs(self):
+        """
+        Record the selected regions as pieces of one colony.
+        """
+
+        view = self.activeviewer
+        if view is None:
+            return
+
+        if len(view.selected_blobs) < 2:
+            msgBox = QMessageBox()
+            msgBox.setWindowTitle(self.TAGLAB_VERSION)
+            msgBox.setText("You need to select at least <em>two</em> regions to group them as "
+                           "pieces of one colony.")
+            msgBox.exec()
+            return
+
+        selected = list(view.selected_blobs)
+
+        # the whole of any group already involved comes along, so the class applies to
+        # every region that will end up in the group and not just the ones on screen
+        members = set(selected)
+        for blob in selected:
+            members.update(view.annotations.blobsByGroup(blob.group))
+
+        class_name = self.resolveGroupClass(members)
+        if class_name is False:
+            return
+
+        message = "[OP-GROUP] GROUP operation begins.. (number of selected regions: " + \
+                  str(len(selected)) + ")"
+        logfile.info(message)
+
+        if class_name is not None:
+            for blob in members:
+                if blob.class_name != class_name:
+                    view.setBlobClass(blob, class_name)
+
+        key = view.annotations.groupBlobs(selected)
+
+        self.project.genet.updateGenets()
+        view.saveUndo()
+        self.data_panel.rebuild()
+
+        logfile.info("[OP-GROUP] GROUP operation ends. (group " + str(key) + ", " +
+                     str(len(members)) + " regions)")
+
+    @pyqtSlot()
+    def ungroupBlobs(self):
+        """
+        Take the selected regions out of their groups.
+        """
+
+        view = self.activeviewer
+        if view is None:
+            return
+
+        grouped = [blob for blob in view.selected_blobs if blob.group is not None]
+        if not grouped:
+            msgBox = QMessageBox()
+            msgBox.setWindowTitle(self.TAGLAB_VERSION)
+            msgBox.setText("None of the selected regions belong to a group.")
+            msgBox.exec()
+            return
+
+        view.annotations.ungroupBlobs(grouped)
+
+        self.project.genet.updateGenets()
+        view.saveUndo()
+        self.data_panel.rebuild()
+
+        logfile.info("[OP-GROUP] UNGROUP operation on " + str(len(grouped)) + " regions.")
 
     def union(self):
         """

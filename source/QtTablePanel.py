@@ -336,6 +336,19 @@ class QtTablePanel(QWidget):
         self.data_table.setModel(self.model)
         self.data_table.update()
 
+    def rebuild(self):
+        """
+        Rebuild the whole table from the image. The rows are otherwise kept in step one
+        edit at a time, which does not cover a change touching many of them at once.
+        """
+
+        if self.active_image is None:
+            return
+
+        self.active_image.annotations.table_needs_update = True
+        self.data = self.active_image.create_data_table()
+        self.updateTable(self.data)
+
     def updateData(self):
 
         self.data_table.update()

@@ -261,6 +261,7 @@ class Image(object):
 
             dict = {
                 'Id': np.zeros(number_of_seg + number_of_points, dtype=int),
+                'Group': [],
                 'Type': [],
                 'Class': [],
                 'Area': np.zeros(number_of_seg + number_of_points),
@@ -269,6 +270,9 @@ class Image(object):
 
             for i, blob in enumerate(visible_blobs):
                 dict['Id'][i] = blob.id
+                # blank rather than a number for a region that stands alone: ids start
+                # at zero, so there is no spare value to stand for "no group"
+                dict['Group'].append("" if blob.group is None else str(blob.group))
                 dict['Type'].append('R')
                 dict['Class'].append(blob.class_name)
                 dict['Area'][i] = round(blob.area * (scale_factor) * (scale_factor) / 100, 2)
@@ -277,12 +281,13 @@ class Image(object):
 
             for i, annpoint in enumerate(visible_annpoints):
                 dict['Id'][i + number_of_seg] = annpoint.id
+                dict['Group'].append("")
                 dict['Type'].append('P')
                 dict['Class'].append(annpoint.class_name)
                 dict['Area'][i + number_of_seg] = 0.0
 
 
-            df = pd.DataFrame(dict, columns=['Id','Type', 'Class', 'Area'])
+            df = pd.DataFrame(dict, columns=['Id', 'Group', 'Type', 'Class', 'Area'])
             self.cache_data_table = df
             self.annotations.table_needs_update = False
 

@@ -52,6 +52,13 @@ class Blob(object):
         self.class_name = "Empty"
 
         self.genet = None
+
+        # Pieces of one colony that do not touch. Holds the key of the group this
+        # region belongs to, or None when it stands alone. Unlike genet, which is
+        # recomputed every time the project opens, this is saved: it is the link
+        # itself rather than a number derived from the links.
+        self.group = None
+
         # note about the coral, i.e. damage type
         self.note = ""
         self.data = {}
@@ -117,6 +124,7 @@ class Blob(object):
         blob.version = self.version + 1
 
         blob.genet = self.genet
+        blob.group = self.group
         blob.class_name = self.class_name
 
         blob.note = self.note
@@ -467,6 +475,10 @@ class Blob(object):
         # for the moment we just update genets on load.
         # if "genet" in dic:
         #   self.genet = dic["genet"]
+
+        # absent in projects saved before grouping existed, which read as ungrouped
+        self.group = dic.get("group")
+
         self.class_name = dic["class name"]
         self.instance_name = dic["instance name"]
         self.blob_name = dic["blob name"]
@@ -535,6 +547,7 @@ class Blob(object):
             dic["inner contours"].append(self.toPoints(c))
 
 #       dic["genet"] = self.genet
+        dic["group"] = self.group
         dic["class name"] = self.class_name
 
         dic["instance name"] = self.instance_name

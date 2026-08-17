@@ -47,6 +47,21 @@ class Genet:
             r1 = root(p1)
             parents[r1] = r0
 
+        # Pieces of one colony within a single map. These are the only links a
+        # single-timepoint project has - it has no correspondences to draw on - and
+        # they join the same partition, so a colony broken into pieces reads as one
+        # genet whether the pieces were related across time or within one map.
+        for img in self.project.images:
+            first_of_group = {}
+            for blob in img.annotations.seg_blobs:
+                if blob.group is None:
+                    continue
+                other = first_of_group.get(blob.group)
+                if other is None:
+                    first_of_group[blob.group] = blob
+                elif blob.genet != other.genet:
+                    link(other.genet, blob.genet)
+
         for corrs in self.project.correspondences.values():
             for index, row in corrs.data.iterrows():
                 id1 = int(row['Blob1'])
@@ -114,6 +129,9 @@ class Genet:
             fields.append(img.name + " Class name")
             fields.append(img.name + " Object id")
             fields.append(img.name + " Area")
+            # how many separate pieces the colony was in on this map, counted from the
+            # regions themselves rather than stored, so it cannot fall out of step
+            fields.append(img.name + " Isolates")
         lines = {}
 
         for img in self.project.images:
@@ -141,6 +159,7 @@ class Genet:
         count = 1
         for i,img in enumerate(self.project.images):
             scale_factor = img.pixelSize()
+            isolates = {}
             for blob in self.blobs[i]:
                 line = lines[blob.genet]
                 row = line['row']
@@ -148,12 +167,18 @@ class Genet:
                 data[row][count] += blob.class_name + "  "
                 data[row][count+1] += str(blob.id) + "  "
                 data[row][count+2] += str(area) + "  "
+                isolates[row] = isolates.get(row, 0) + 1
 
-            count += 3
+            for row, n in isolates.items():
+                data[row][count+3] = n
+
+            count += 4
 
         import csv
 
-        with open(filename, mode='w') as file:
+        # without newline='' the csv module's line ending is translated again on
+        # Windows and every row comes out followed by a blank one
+        with open(filename, mode='w', newline='') as file:
             writer = csv.writer(file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
             writer.writerow(fields)
             for line in data:

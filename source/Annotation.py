@@ -157,6 +157,76 @@ class Annotation(object):
     def blobByGenet(self, genet):
         return [blob for blob in self.seg_blobs if blob.genet == genet]
 
+    def blobsByGroup(self, group):
+        """
+        Every region belonging to the given group. An ungrouped region belongs to no
+        group, so None never matches anything.
+        """
+
+        if group is None:
+            return []
+
+        return [blob for blob in self.seg_blobs if blob.group == group]
+
+    def usedGroups(self):
+        return set(blob.group for blob in self.seg_blobs if blob.group is not None)
+
+    def groupBlobs(self, blobs):
+        """
+        Record the given regions as pieces of one colony and return the group key.
+
+        Any group the regions already belong to is absorbed whole, so grouping one
+        member of a group grafts on the rest of it rather than tearing it in half.
+        The key is the lowest id among the members, which reads back against the Id
+        column. It is only chosen here, never recomputed: ids are handed out lowest
+        first and so are reused after a deletion, and a key that followed its members
+        around could later collide with an unrelated region that happened to inherit
+        the id.
+        """
+
+        members = set()
+        for blob in blobs:
+            members.add(blob)
+            for other in self.blobsByGroup(blob.group):
+                members.add(other)
+
+        if len(members) < 2:
+            return None
+
+        key = min(blob.id for blob in members)
+
+        # a key already spoken for by some other group would silently join the two
+        taken = self.usedGroups() - set(blob.group for blob in members)
+        while key in taken:
+            key += 1
+
+        for blob in members:
+            blob.group = key
+
+        self.table_needs_update = True
+
+        return key
+
+    def ungroupBlobs(self, blobs):
+        """
+        Take the given regions out of their groups. A group left holding a single
+        region is dissolved, since a colony of one piece is just a region.
+        """
+
+        touched = set(blob.group for blob in blobs if blob.group is not None)
+
+        for blob in blobs:
+            blob.group = None
+
+        for group in touched:
+            remaining = self.blobsByGroup(group)
+            if len(remaining) == 1:
+                remaining[0].group = None
+
+        self.table_needs_update = True
+
+        return touched
+
     def save(self):
 
         self.annotationsDict = { "regions": self.seg_blobs, "points": self.annpoints }
@@ -854,6 +924,7 @@ class Annotation(object):
             'TagLab Type': [],
             'TagLab Genet Id': np.zeros(number_of_rows, dtype=np.int64),
             'TagLab Id': np.zeros(number_of_rows, dtype=np.int64),
+            'TagLab Group': [],
             'TagLab Class name': [],
             'TagLab Centroid x': np.zeros(number_of_rows),
             'TagLab Centroid y': np.zeros(number_of_rows),
@@ -881,6 +952,7 @@ class Annotation(object):
         for blob in visible_blobs:
             dict['Image name'].append(imagename)
             dict['TagLab Id'][i] = blob.id
+            dict['TagLab Group'].append("" if blob.group is None else str(blob.group))
             dict['TagLab Type'].append('Region')
             dict['TagLab Date'].append(date)
             dict['TagLab Class name'].append(blob.class_name)
@@ -940,6 +1012,7 @@ class Annotation(object):
         for annpoint in visible_points:
             dict['Image name'].append(imagename)
             dict['TagLab Id'][j] = annpoint.id
+            dict['TagLab Group'].append("")
             dict['TagLab Type'].append('Points')
             dict['TagLab Date'].append(date)
             dict['TagLab Class name'].append(annpoint.class_name)
