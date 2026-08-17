@@ -146,17 +146,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         taglab = self.centralWidget()
-        if taglab.project.filename is not None:
-            box = QMessageBox()
-            reply = box.question(self, taglab.TAGLAB_VERSION, "Do you want to save changes to " + taglab.project.filename,
-                                 QMessageBox.Cancel | QMessageBox.Yes | QMessageBox.No)
 
-            if reply == QMessageBox.Yes:
-                taglab.saveProject()
-
-            if reply == QMessageBox.Cancel:
-                event.ignore()
-                return
+        if not taglab.offerToSaveChanges():
+            event.ignore()
+            return
 
         super(MainWindow, self).closeEvent(event)
 
@@ -198,6 +191,7 @@ class TagLab(QMainWindow):
         logfile.info("[INFO] Initizialization begins..")
 
         self.project = Project()         # current project
+        self.saved_fingerprint = None    # the project as it was last saved or loaded
         self.last_image_loaded = None
 
         self.map_3D_filename = None    #refactor THIS!
@@ -1019,6 +1013,58 @@ class TagLab(QMainWindow):
         viewer = self.sender()
         self.contextMenuPosition = viewer.mapToGlobal(position)
         action = menu.exec_(self.contextMenuPosition)
+
+    def rememberSavedState(self):
+        """
+        Take the project as it now stands to be the one on disk. Called whenever the
+        two are known to agree: after a save, after a load, and on a fresh project.
+        """
+
+        self.saved_fingerprint = self.project.fingerprint()
+
+    def projectHasUnsavedChanges(self):
+        """
+        Whether closing now would lose work. The project is compared against what was
+        last written or read, so this answers the question that actually matters -
+        would the saved file be different - rather than inferring it from which
+        actions happen to have been taken.
+        """
+
+        if self.saved_fingerprint is None:
+            return len(self.project.images) > 0
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            return self.project.fingerprint() != self.saved_fingerprint
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def offerToSaveChanges(self):
+        """
+        Ask about unsaved work before it is discarded, and say whether to carry on.
+        Nothing is asked when the project is already saved. Returns False only if the
+        user chooses to cancel, in which case the caller must leave things alone.
+        """
+
+        if not self.projectHasUnsavedChanges():
+            return True
+
+        if self.project.filename is None:
+            question = "The current project has not been saved. Do you want to save it?"
+        else:
+            question = "Do you want to save changes to " + self.project.filename
+
+        box = QMessageBox()
+        reply = box.question(self, self.TAGLAB_VERSION, question,
+                             QMessageBox.Cancel | QMessageBox.Yes | QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            self.saveProject()
+            # saveProject goes through Save As when the project has no name yet, and
+            # that can be called off, which leaves the changes still unsaved.
+            return not self.projectHasUnsavedChanges()
+
+        return reply != QMessageBox.Cancel
 
     def setProjectTitle(self, project_name):
 
@@ -2772,6 +2818,9 @@ class TagLab(QMainWindow):
         # connect project with the panels
         self.connectProject()
 
+        # an empty project has nothing in it worth saving
+        self.rememberSavedState()
+
     def resetToolbar(self):
 
         self.btnMove.setChecked(False)
@@ -3858,17 +3907,8 @@ class TagLab(QMainWindow):
     @pyqtSlot()
     def newProject(self):
 
-        if self.project.filename is not None:
-
-            box = QMessageBox()
-            reply = box.question(self, self.TAGLAB_VERSION, "Do you want to save current project to " + self.project.filename,
-                                 QMessageBox.Cancel | QMessageBox.Yes | QMessageBox.No)
-
-            if reply == QMessageBox.Yes:
-                self.saveProject()
-
-            if reply == QMessageBox.Cancel:
-                return
+        if not self.offerToSaveChanges():
+            return
 
         self.resetAll()
         self.setTool("MOVE")
@@ -6035,6 +6075,9 @@ class TagLab(QMainWindow):
         self.updateToolStatus()
         self.groupbox_blobpanel.updateDictionary(self.project.labels)
 
+        # freshly read, so it matches the file it came from
+        self.rememberSavedState()
+
 
     def appendProject(self, filename):
         """
@@ -6070,6 +6113,7 @@ class TagLab(QMainWindow):
         """
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.project.save()
+        self.rememberSavedState()
         QApplication.restoreOverrideCursor()
 
         if self.timer is None:

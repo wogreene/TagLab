@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import json
 import csv
 import os
@@ -303,6 +304,32 @@ class Project(QObject):
         else:
             return list(class_names)
 
+    def serialize(self):
+        """
+        The text save() writes out. Kept separate from save() so the project can be
+        compared against the one on disk without having to write anything.
+        """
+
+        return json.dumps(self.__dict__, cls=ProjectEncoder, indent=1)
+
+    def fingerprint(self):
+        """
+        A short stand-in for the saved project. Two of these differ exactly when the
+        saved files would differ, so it answers "has anything changed?" without
+        keeping a second copy of the whole project in memory.
+
+        The text is hashed as it is produced rather than built up whole, since a
+        large project runs to tens of megabytes of json. The layout differs from
+        what save() writes - no indenting - which does not matter, as these are
+        only ever compared against each other.
+        """
+
+        digest = hashlib.sha256()
+        for chunk in ProjectEncoder().iterencode(self.__dict__):
+            digest.update(chunk.encode("utf-8"))
+
+        return digest.hexdigest()
+
     def save(self, filename=None):
 
         # check inconsistencies. They can be caused by bugs during the regions update/editing
@@ -316,8 +343,7 @@ class Project(QObject):
                         "Inconsistent correspondences has been found !!\nPlease, Notify this problem to the TagLab developers.")
                     msgBox.exec()
 
-        data = self.__dict__
-        str = json.dumps(data, cls=ProjectEncoder, indent=1)
+        str = self.serialize()
 
         if filename is None:
             filename = self.filename
