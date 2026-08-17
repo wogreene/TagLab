@@ -203,7 +203,13 @@ class Annotation(object):
 
     def union(self, blobs):
         """
-        Create a new blob that is the union of the (two) blobs given
+        Create a new blob that is the union of the (two) blobs given.
+
+        Returns None when the blobs do not all touch. A blob carries a single outer
+        contour, so a region made of separate pieces cannot be represented: the
+        contour would keep only the largest piece and the rest would be recorded as
+        holes, leaving the geometry disagreeing with the area. Grouping is what
+        relates pieces that do not touch.
         """
         # boxs are in image space, masks invert x and y.
         boxes = []
@@ -214,6 +220,14 @@ class Annotation(object):
 
         for blob in blobs:
             Mask.paintMask(mask, box, blob.getMask(), blob.bbox, 1)
+
+        # One piece, sharing edges rather than only corners. Two regions meeting at a
+        # single corner are one region by the looser definition, but the contour tracer
+        # still walks them as two rings and the result would be as broken as if they
+        # were far apart, so they are refused too.
+        pieces = ndi.label(mask)[1]
+        if pieces > 1:
+            return None
 
         if mask.any():
             # measure is brutally slower with non int types (factor 4), while byte&bool would be faster by 25%, conversion is fast.

@@ -3245,6 +3245,12 @@ class TagLab(QMainWindow):
 
             if union_blob is None:
                 logfile.info("[OP-MERGE] INVALID MERGE OVERLAPPED LABELS -> blobs are separated.")
+                msgBox = QMessageBox()
+                msgBox.setWindowTitle(self.TAGLAB_VERSION)
+                msgBox.setText("These regions do not all touch, so they cannot be merged into one. "
+                               "To record them as pieces of the same colony, select them and press "
+                               "<em>G</em> to group them instead.")
+                msgBox.exec()
             else:
 
                 view.project.updateCorrespondences("REPLACE", view.image, [union_blob], view.selected_blobs, "")
