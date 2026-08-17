@@ -657,42 +657,55 @@ class Annotation(object):
         else:
             return labelimg
 
-    def calculate_inner_blobs(self, working_area):
+    def calculate_inner_blobs(self, working_area, angle=0.0):
         """
         This consider only blobs falling ENTIRELY in the working area"
+
+        A working area laid at an angle is tested exactly: every corner of the region's bounding
+        box has to be inside the rotated rectangle, not inside the box that encloses it.
         """
         selected_blobs = self.seg_blobs
         inner_blobs = []
         for blob in selected_blobs:
-            if Mask.insideBox(working_area, blob.bbox):
+            if angle:
+                top, left, w, h = blob.bbox[0], blob.bbox[1], blob.bbox[2], blob.bbox[3]
+                xs = [left, left + w, left + w, left]
+                ys = [top, top, top + h, top + h]
+                if genutils.workingAreaContains(working_area, angle, xs, ys).all():
+                    inner_blobs.append(blob)
+            elif Mask.insideBox(working_area, blob.bbox):
                 inner_blobs.append(blob)
 
         return inner_blobs
 
-    def calculate_inner_intersecting_blobs(self, working_area):
+    def calculate_inner_intersecting_blobs(self, working_area, angle=0.0):
         """
         This consider only blobs inside or intersecting the working area"
+
+        With an angle this widens to the box enclosing the rotated area, so it can return a few
+        regions that only touch the corners outside it. It is used to decide what to look at
+        rather than what to count, so erring wide is the safe direction.
         """
+        area = genutils.workingAreaBoundingBox(working_area, angle) if angle else working_area
+
         selected_blobs = self.seg_blobs
         intersecting_blobs = []
         for blob in selected_blobs:
-            if Mask.checkIntersection(working_area, blob.bbox):
+            if Mask.checkIntersection(area, blob.bbox):
                 intersecting_blobs.append(blob)
 
         return intersecting_blobs
 
 
-    def calculate_inner_points(self, working_area):
+    def calculate_inner_points(self, working_area, angle=0.0):
         """
         This consider only points having center inside the working area"
         """
         selected_annpoints = self.annpoints
         inner_annpoints = []
         for annpoint in selected_annpoints:
-            if (annpoint.coordy > working_area[0]) and (annpoint.coordy < working_area[0] + working_area[3]):
-                if (annpoint.coordx > working_area[1]) and (annpoint.coordx < working_area[1] + working_area[2]):
-                    inner_annpoints.append(annpoint)
-
+            if genutils.workingAreaContains(working_area, angle, annpoint.coordx, annpoint.coordy):
+                inner_annpoints.append(annpoint)
 
         return inner_annpoints
 
@@ -791,8 +804,9 @@ class Annotation(object):
 
         else:
             # only blobs and points inside the working area are considered
-            self.blobs = self.calculate_inner_blobs(working_area)
-            self.annpoints = self.calculate_inner_points(working_area)
+            angle = getattr(project, "working_area_angle", 0.0)
+            self.blobs = self.calculate_inner_blobs(working_area, angle)
+            self.annpoints = self.calculate_inner_points(working_area, angle)
 
         visible_blobs = []
 

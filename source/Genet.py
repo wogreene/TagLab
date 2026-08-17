@@ -120,7 +120,8 @@ class Genet:
             if working_area is None:
                 blobs = img.annotations.seg_blobs
             else:
-                blobs = img.annotations.calculate_inner_blobs(working_area)
+                blobs = img.annotations.calculate_inner_blobs(
+                    working_area, getattr(self.project, "working_area_angle", 0.0))
 
             self.blobs.append(blobs)
 
@@ -169,7 +170,8 @@ class Genet:
             if working_area is None:
                 blobs = img.annotations.seg_blobs
             else:
-                blobs = img.annotations.calculate_inner_blobs(working_area)
+                blobs = img.annotations.calculate_inner_blobs(
+                    working_area, getattr(self.project, "working_area_angle", 0.0))
 
             self.blobs.append(blobs)
 

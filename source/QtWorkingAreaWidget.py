@@ -28,6 +28,7 @@ import json
 class QtWorkingAreaWidget(QWidget):
 
     areaChanged = pyqtSignal(int, int, int, int)
+    placeRandomRequested = pyqtSignal(float, float)
     closed = pyqtSignal()
 
     def __init__(self, parent=None, scale=None):
@@ -35,6 +36,9 @@ class QtWorkingAreaWidget(QWidget):
 
         # Scaling of active image
         self.scale = scale
+
+        # angle of the area, non-zero only for a randomly placed transect
+        self.working_area_angle = 0.0
 
         self.setStyleSheet("background-color: rgb(40,40,40); color: white")
 
@@ -185,6 +189,8 @@ class QtWorkingAreaWidget(QWidget):
         separator3.setStyleSheet("QLabel { border-bottom: 1px solid rgb(80,80,80); padding: 1px; margin: 1px; }")
         layout_main_vert.addWidget(separator3)
 
+        layout_main_vert.addLayout(self.buildRandomTransectSection())
+
 
         # choose / Cancel / Apply buttons
         buttons_layout = QHBoxLayout()
@@ -217,6 +223,82 @@ class QtWorkingAreaWidget(QWidget):
                             Qt.WindowCloseButtonHint |
                             Qt.WindowTitleHint |
                             Qt.WindowStaysOnTopHint)
+
+    def buildRandomTransectSection(self):
+        """
+        Lay a transect of a fixed size at a random position and a random angle.
+
+        The size is decided in advance and where it lands is not, which is how a transect is
+        chosen on a reef. The placement itself needs the map, so the button only announces the
+        size that was asked for and the main window works out where it goes.
+        """
+
+        self.edit_transect_W = QLineEdit("5.0")
+        self.edit_transect_W.setStyleSheet("background-color: rgb(55,55,55); border: 1px solid rgb(90,90,90)")
+        self.edit_transect_W.setFixedWidth(70)
+
+        self.edit_transect_H = QLineEdit("1.0")
+        self.edit_transect_H.setStyleSheet("background-color: rgb(55,55,55); border: 1px solid rgb(90,90,90)")
+        self.edit_transect_H.setFixedWidth(70)
+
+        self.btnPlaceRandom = QPushButton("Place randomly")
+        self.btnPlaceRandom.setToolTip("Drop a transect of this size somewhere on the map, at a "
+                                       "random angle, entirely on surveyed ground")
+        self.btnPlaceRandom.clicked.connect(self.requestRandomPlacement)
+
+        self.label_angle = QLabel("angle: -")
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Size (m):"))
+        row.addWidget(self.edit_transect_W)
+        row.addWidget(QLabel("x"))
+        row.addWidget(self.edit_transect_H)
+        row.addWidget(self.btnPlaceRandom)
+        row.addWidget(self.label_angle)
+        row.addStretch()
+
+        section = QVBoxLayout()
+        section.addWidget(QLabel("Random transect:"))
+        section.addLayout(row)
+
+        if self.scale is None:
+            # without a pixel size a length in metres means nothing
+            self.edit_transect_W.setEnabled(False)
+            self.edit_transect_H.setEnabled(False)
+            self.btnPlaceRandom.setEnabled(False)
+            self.btnPlaceRandom.setToolTip("Set the pixel size of the map to place a transect by "
+                                           "its size in metres")
+
+        return section
+
+    @pyqtSlot()
+    def requestRandomPlacement(self):
+
+        try:
+            width_m = float(self.edit_transect_W.text())
+            height_m = float(self.edit_transect_H.text())
+        except ValueError:
+            self.label_angle.setText("angle: -")
+            return
+
+        if width_m <= 0.0 or height_m <= 0.0:
+            self.label_angle.setText("angle: -")
+            return
+
+        self.placeRandomRequested.emit(width_m, height_m)
+
+    def setPlacedArea(self, top, left, width, height, angle):
+        """
+        Show a transect the main window has placed.
+        """
+
+        # updateArea clears the angle, so it is set afterwards
+        self.updateArea(left, top, width, height)
+        self.working_area_angle = angle
+        self.label_angle.setText("angle: {:.1f} deg".format(angle))
+
+    def getWorkingAreaAngle(self):
+        return getattr(self, "working_area_angle", 0.0)
 
     def closeEvent(self, event):
         self.closed.emit()
@@ -388,7 +470,11 @@ class QtWorkingAreaWidget(QWidget):
     def updateArea(self, x, y, w, h):
         """
         area has been updated: update the values
-        """    
+
+        Dragging out a rectangle gives an axis-aligned one, so any angle left over from a
+        previously placed transect is cleared. setPlacedArea sets the angle after calling this.
+        """
+        self.working_area_angle = 0.0
         self.updateAreaValues(x, y, w, h)
 
     def deleteWorkingAreaValues(self):
@@ -404,6 +490,9 @@ class QtWorkingAreaWidget(QWidget):
         self.edit_Y_m.setText("")
         self.edit_W_m.setText("")
         self.edit_H_m.setText("")
+
+        self.working_area_angle = 0.0
+        self.label_angle.setText("angle: -")
 
     def getWorkingArea(self):
         """

@@ -194,7 +194,8 @@ class Project(QObject):
 
     def __init__(self, filename=None, labels={}, images=[], correspondences=None,
                  spatial_reference_system=None, metadata={}, image_metadata_template={}, genet={},
-                 dictionary_name="", dictionary_description="", working_area=None, region_attributes={},
+                 dictionary_name="", dictionary_description="", working_area=None,
+                 working_area_angle=0.0, region_attributes={},
                  markers={}, parent=None):
         super(Project, self).__init__(parent)
 
@@ -203,7 +204,11 @@ class Project(QObject):
         # area of the images where the user annotate the data
         # NOTE 1: since the images are co-registered the working area is the same for all the images
         # NOTE 2: the working area is a RECTANGULAR region stored as [top, left, width, height]
+        # NOTE 3: working_area_angle turns that rectangle about its own centre, so that a
+        # transect can be laid at any orientation. Zero, and a project saved before the angle
+        # existed, mean the axis-aligned rectangle it has always been.
         self.working_area = working_area
+        self.working_area_angle = float(working_area_angle) if working_area_angle else 0.0
 
         self.dictionary_name = dictionary_name
         self.dictionary_description = dictionary_description

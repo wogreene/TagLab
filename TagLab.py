@@ -4791,12 +4791,70 @@ class TagLab(QMainWindow):
 
                     self.working_area_widget.areaChanged[int, int, int, int].connect(select_area_tool.setSelectionRectangle)
 
+                    self.working_area_widget.placeRandomRequested[float, float].connect(
+                        self.placeRandomWorkingArea)
+
                     if self.project.working_area is not None:
                         if len(self.project.working_area) == 4:
                             wa = self.project.working_area
                             self.working_area_widget.updateArea(wa[1], wa[0], wa[2], wa[3])
+                            self.working_area_widget.working_area_angle = getattr(
+                                self.project, "working_area_angle", 0.0)
 
                 self.working_area_widget.show()
+
+    @pyqtSlot(float, float)
+    def placeRandomWorkingArea(self, width_m, height_m):
+        """
+        Drop a transect of the requested size on the map at a random position and angle.
+
+        The placement keeps the whole transect on surveyed ground, using the same validity mask
+        the point sampler uses, so a transect never half-hangs off the edge of the data.
+        """
+
+        image = self.activeviewer.image if self.activeviewer is not None else None
+        if image is None:
+            return
+
+        pixel_size_mm = image.pixelSize()
+        if not pixel_size_mm:
+            return
+
+        width_px = int(round(width_m * 1000.0 / pixel_size_mm))
+        height_px = int(round(height_m * 1000.0 / pixel_size_mm))
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            mask = None
+            rgb_channel = image.getRGBChannel()
+            if rgb_channel is not None:
+                try:
+                    mask, _, _ = rasterops.readValidityMask(rgb_channel.filename)
+                except Exception:
+                    mask = None
+
+            area, angle = rasterops.placeRandomWorkingArea(image.width, image.height,
+                                                           width_px, height_px, valid_mask=mask)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if area is None:
+            msgBox = QMessageBox()
+            msgBox.setWindowTitle(self.TAGLAB_VERSION)
+            msgBox.setText("A {:g} x {:g} m transect does not fit anywhere on the surveyed part "
+                           "of this map.".format(width_m, height_m))
+            msgBox.exec()
+            return
+
+        self.working_area_widget.setPlacedArea(area[0], area[1], area[2], area[3], angle)
+
+        # show it straight away, so the placement can be judged before it is applied
+        self.project.working_area = area
+        self.project.working_area_angle = angle
+        self.viewerplus.setProject(self.project)
+        self.viewerplus2.setProject(self.project)
+        self.viewerplus.drawWorkingArea()
+        self.viewerplus2.drawWorkingArea()
 
     @pyqtSlot()
     def deleteWorkingAreaWidget(self):
@@ -4811,6 +4869,7 @@ class TagLab(QMainWindow):
         if width != 0 and height != 0:
             # NOTE: working area format in Project is [top, left, width, height]
             self.project.working_area = [y, x, width, height]
+            self.project.working_area_angle = self.working_area_widget.getWorkingAreaAngle()
             self.viewerplus.setProject(self.project)
             self.viewerplus2.setProject(self.project)
 
@@ -4834,6 +4893,7 @@ class TagLab(QMainWindow):
         if reply == QMessageBox.Yes:
             self.activeviewer.undrawWorkingArea()
             self.project.working_area = None
+            self.project.working_area_angle = 0.0
             self.working_area_widget.deleteWorkingAreaValues()
             self.setTool("MOVE")
 

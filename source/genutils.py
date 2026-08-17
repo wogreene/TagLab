@@ -45,6 +45,76 @@ def exceedsPaintLimit(width, height):
     return width > QT_RASTER_COORD_LIMIT or height > QT_RASTER_COORD_LIMIT
 
 
+def workingAreaCorners(working_area, angle_degrees):
+    """
+    The four corners (x, y) of a working area, in order, rotated about its own centre.
+
+    The area itself is still stored as [top, left, width, height]; the angle turns it around
+    its centre, so an angle of zero gives exactly the axis-aligned rectangle it always was.
+    """
+
+    top, left, width, height = (float(v) for v in working_area[:4])
+    cx = left + width / 2.0
+    cy = top + height / 2.0
+
+    corners = np.array([[left, top],
+                        [left + width, top],
+                        [left + width, top + height],
+                        [left, top + height]], dtype=np.float64)
+
+    if not angle_degrees:
+        return corners
+
+    a = math.radians(angle_degrees)
+    rotation = np.array([[math.cos(a), -math.sin(a)],
+                         [math.sin(a), math.cos(a)]], dtype=np.float64)
+
+    return (corners - [cx, cy]) @ rotation.T + [cx, cy]
+
+
+def workingAreaContains(working_area, angle_degrees, x, y):
+    """
+    Whether points fall inside a (possibly rotated) working area.
+
+    x and y may be scalars or arrays. The test rotates the points into the area's own frame
+    rather than rotating the area, which keeps it a plain bounds check.
+    """
+
+    top, left, width, height = (float(v) for v in working_area[:4])
+    cx = left + width / 2.0
+    cy = top + height / 2.0
+
+    dx = np.asarray(x, dtype=np.float64) - cx
+    dy = np.asarray(y, dtype=np.float64) - cy
+
+    if angle_degrees:
+        a = math.radians(-angle_degrees)
+        rx = dx * math.cos(a) - dy * math.sin(a)
+        ry = dx * math.sin(a) + dy * math.cos(a)
+    else:
+        rx, ry = dx, dy
+
+    return (np.abs(rx) <= width / 2.0) & (np.abs(ry) <= height / 2.0)
+
+
+def workingAreaBoundingBox(working_area, angle_degrees):
+    """
+    Axis-aligned [top, left, width, height] enclosing a rotated working area.
+
+    Operations that have to cut a rectangle out of a raster - classification, label map and
+    CoralNet export - use this. They therefore cover slightly more than a rotated area does;
+    what is *inside* the area, which is what the counts depend on, is decided by
+    workingAreaContains and is exact.
+    """
+
+    corners = workingAreaCorners(working_area, angle_degrees)
+    left, top = corners.min(axis=0)
+    right, bottom = corners.max(axis=0)
+
+    return [int(math.floor(top)), int(math.floor(left)),
+            int(math.ceil(right - left)), int(math.ceil(bottom - top))]
+
+
 def clampCoords(x, y, W, H):
 
     if x < 0:

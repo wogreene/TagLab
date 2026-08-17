@@ -630,6 +630,90 @@ def saveGeorefLabelMap(label_map, georef_filename, working_area, out_name):
 DEM_Z_UNIT_TO_MM = 1000.0
 
 
+def placeRandomWorkingArea(map_width, map_height, area_width, area_height,
+                           valid_mask=None, attempts=2000, seed=None):
+    """
+    Drop a fixed-size rectangle on the map at a random position and a random angle.
+
+    This is the transect a diver would lay: the size is decided in advance and where it lands
+    is not. The angle is uniform over a half turn - a rectangle at 200 degrees is the same
+    rectangle as at 20 - and the position is uniform over the placements that keep all four
+    corners on the map, and on data when a validity mask is given, so a transect never runs off
+    the edge of the survey.
+
+    Returns ([top, left, width, height], angle) with the rectangle unrotated and the angle to
+    turn it by, or (None, 0.0) if nothing fits.
+    """
+
+    rng = np.random.default_rng(seed)
+
+    if area_width <= 0 or area_height <= 0:
+        return None, 0.0
+    if area_width > map_width and area_height > map_height:
+        return None, 0.0
+
+    half_w = area_width / 2.0
+    half_h = area_height / 2.0
+
+    for _ in range(attempts):
+        angle = float(rng.uniform(0.0, 180.0))
+        a = math.radians(angle)
+        cos_a, sin_a = abs(math.cos(a)), abs(math.sin(a))
+
+        # half-extent of the rotated rectangle, so the centre can be kept far enough in
+        span_x = half_w * cos_a + half_h * sin_a
+        span_y = half_w * sin_a + half_h * cos_a
+
+        if 2 * span_x > map_width or 2 * span_y > map_height:
+            continue
+
+        cx = float(rng.uniform(span_x, map_width - span_x))
+        cy = float(rng.uniform(span_y, map_height - span_y))
+
+        area = [cy - half_h, cx - half_w, area_width, area_height]
+
+        if valid_mask is not None and not workingAreaIsOnData(area, angle, valid_mask,
+                                                              map_width, map_height):
+            continue
+
+        return [int(round(area[0])), int(round(area[1])),
+                int(round(area[2])), int(round(area[3]))], angle
+
+    return None, 0.0
+
+
+def workingAreaIsOnData(area, angle, valid_mask, map_width, map_height):
+    """
+    True when every part of a placed area sits on pixels that carry data.
+
+    The area is sampled on a grid rather than only at its corners, so a transect cannot span a
+    hole in the middle of the survey while its corners happen to land on good ground.
+    """
+
+    steps = 24
+    u = np.linspace(0.0, 1.0, steps)
+    gu, gv = np.meshgrid(u, u)
+
+    top, left, width, height = area
+    cx = left + width / 2.0
+    cy = top + height / 2.0
+
+    # points across the unrotated rectangle, then rotated into place
+    px = left + gu.ravel() * width - cx
+    py = top + gv.ravel() * height - cy
+    a = math.radians(angle)
+    x = cx + px * math.cos(a) - py * math.sin(a)
+    y = cy + px * math.sin(a) + py * math.cos(a)
+
+    mh, mw = valid_mask.shape
+    mx = np.clip((x * mw / map_width).astype(int), 0, mw - 1)
+    my = np.clip((y * mh / map_height).astype(int), 0, mh - 1)
+
+    inside = (x >= 0) & (x < map_width) & (y >= 0) & (y < map_height)
+
+    return bool(inside.all() and valid_mask[my, mx].all())
+
+
 def rasterSize(filename):
     """
     (width, height) of a raster, or None if it cannot be opened.

@@ -23,7 +23,7 @@
 
 import os.path
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRectF, QLineF, QFileInfo, QDir, pyqtSlot, pyqtSignal, QT_VERSION_STR
-from PyQt5.QtGui import QPen, QColor, QFont, QBrush
+from PyQt5.QtGui import QPen, QColor, QFont, QBrush, QPolygonF
 from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QFileDialog, QGraphicsItem, QGraphicsSimpleTextItem, QPlainTextEdit,QSizePolicy
 
 from source.Undo import Undo
@@ -40,6 +40,7 @@ from source.QtImageViewer import QtImageViewer
 from source.QtToolMessagePanel import QtToolMessagePanel
 
 from source.genutils import distance_point_AABB
+from source import genutils
 
 import math
 import time
@@ -507,11 +508,17 @@ class QtImageViewerPlus(QtImageViewer):
 
         if wa is not None:
           if len(wa) == 4 and wa[2] > 0 and wa[3] > 0:
+                # drawn as a polygon rather than a rect, so that a transect laid at an angle
+                # shows where it actually is
+                angle = getattr(self.project, "working_area_angle", 0.0)
+                corners = genutils.workingAreaCorners(wa, angle)
+                polygon = QPolygonF([QPointF(float(x), float(y)) for x, y in corners])
+
                 if self.working_area_rect is None:
-                    self.working_area_rect = self.scene.addRect(wa[1], wa[0], wa[2], wa[3], self.working_area_pen)
+                    self.working_area_rect = self.scene.addPolygon(polygon, self.working_area_pen)
                     self.working_area_rect.setZValue(6)
                 else:
-                    self.working_area_rect.setRect(wa[1], wa[0], wa[2], wa[3])
+                    self.working_area_rect.setPolygon(polygon)
 
     def undrawWorkingArea(self):
 
