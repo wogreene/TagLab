@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import QWidget, QHeaderView, QSizePolicy, QVBoxLayout, QLab
     QCheckBox, QPushButton, QMessageBox, QGraphicsTextItem, QGraphicsItem, QOpenGLWidget, QGraphicsRectItem
 from PyQt5._QOpenGLFunctions_2_0 import QOpenGLFunctions_2_0
 
+from source import genutils
 from source.QtImageViewer import QtImageViewer
 
 
@@ -407,6 +408,34 @@ class QtSimpleOpenGlShaderViewer(QOpenGLWidget):
         # Redraw
         self.redraw(False)
 
+    # Enough for looking at, and comfortably inside what any card will take. The limit
+    # the card reports is used as well, when it can be asked.
+    MAX_PREVIEW_TEXTURE = 8192
+
+    def __fitToTexture(self, image: QImage) -> QImage:
+        """
+        A copy of the image small enough to upload as a texture.
+        """
+
+        if image is None or image.isNull():
+            return image
+
+        limit = QtSimpleOpenGlShaderViewer.MAX_PREVIEW_TEXTURE
+        if self.gl is not None:
+            try:
+                reported = self.gl.glGetIntegerv(0x0D33)   # GL_MAX_TEXTURE_SIZE
+                if reported:
+                    limit = min(limit, int(reported))
+            except Exception:
+                pass
+
+        if max(image.width(), image.height()) <= limit:
+            return image
+
+        # not QImage.scaled: on an ARGB32 map that converts the whole thing to
+        # premultiplied form first, which on a gigapixel map is gigabytes
+        return genutils.thumbnailFromQImage(image, limit)
+
     def initializeData(self, referenceImg: QImage, imgToAlign: QImage, sizeL: QPointF, sizeR: QPointF,
                        referencePoints: List[QPointF], pointsToAlign: List[QPointF]) -> None:
         """
@@ -418,10 +447,15 @@ class QtSimpleOpenGlShaderViewer(QOpenGLWidget):
         :param: referencePoints the list of points on the "reference image"
         :param: pointsToAlign the list of points on the "image to align"
         """
-        # Create textures
+        # Create textures.
+        #
+        # A map larger than the card's maximum texture size cannot be uploaded, and the
+        # texture comes back empty: the preview showed black with only the markers drawn
+        # over it. The preview samples in normalised coordinates and is handed the real
+        # sizes separately, so a scaled-down copy costs detail and nothing else.
         self.textures = [
-            QOpenGLTexture(referenceImg),
-            QOpenGLTexture(imgToAlign)
+            QOpenGLTexture(self.__fitToTexture(referenceImg)),
+            QOpenGLTexture(self.__fitToTexture(imgToAlign))
         ]
         # Update texture parameters
         for tex in self.textures:
