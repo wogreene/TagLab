@@ -1713,12 +1713,30 @@ All markers must be valid to proceed.
         R = cv2.getRotationMatrix2D((0, 0), -rot, 1.0)[::, :2]
         T = [trax / image2.pixelSize(), tray / image2.pixelSize()]
 
-        # Compute borders
-        bbox: QRectF = image2.annotations.computeBBoxWithAffineTransform(R, T)
-        leftB = abs(int(min(bbox.left(), 0)))
-        topB = abs(int(min(bbox.top(), 0)))
-        rightB = int(max(bbox.right() - image2W, 0))
-        bottomB = int(max(bbox.bottom() - image2H, 0))
+        # Compute borders.
+        #
+        # These have to come from where the map itself lands, not only from where its
+        # regions land. Taking them from the regions alone meant a map being brought in
+        # to be co-registered - which has no regions on it yet - produced a bbox of
+        # nothing, collapsed all four borders to zero, and was written into a canvas the
+        # size of the original, cutting off whatever the rotation swung outside it. Even
+        # with regions on it the corners of the map reach further than they do.
+        corners = np.array([[0.0, 0.0], [image2W, 0.0], [0.0, image2H], [image2W, image2H]])
+        corners = np.array([R @ p + np.array(T) for p in corners])
+        minX, minY = corners[:, 0].min(), corners[:, 1].min()
+        maxX, maxY = corners[:, 0].max(), corners[:, 1].max()
+
+        # the regions are still taken in, in case any of them sit outside the map
+        if len(image2.annotations.seg_blobs) > 0:
+            bbox: QRectF = image2.annotations.computeBBoxWithAffineTransform(R, T)
+            minX, minY = min(minX, bbox.left()), min(minY, bbox.top())
+            maxX, maxY = max(maxX, bbox.right()), max(maxY, bbox.bottom())
+
+        # rounded outwards, so a partly covered pixel is kept rather than shaved off
+        leftB = max(0, int(math.ceil(-minX)))
+        topB = max(0, int(math.ceil(-minY)))
+        rightB = max(0, int(math.ceil(maxX - image2W)))
+        bottomB = max(0, int(math.ceil(maxY - image2H)))
 
         # Extract geo-ref from the reference image
         if image1.georef_filename is not None and image1.georef_filename != "":
