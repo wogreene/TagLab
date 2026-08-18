@@ -1,14 +1,14 @@
 # TagLab — Perry Institute fork: changes for upstream review
 
-Twenty-four commits made while annotating coral reef photomosaics at the Perry Institute for
+Thirty-one commits made while annotating coral reef photomosaics at the Perry Institute for
 Marine Science. Most are fixes and limit removals that are not specific to our workflow; a few are
 ours alone. This document sorts them so you can tell which is which.
 
 | | |
 |---|---|
 | **Forked at** | `0150d84`, 20 May 2026 — "first working version of the georeferencing tool" |
-| **Commits** | 24, plus this document (nothing of upstream `main` is missing from this fork) |
-| **Diff** | +3288 / −514 across 30 files |
+| **Commits** | 31, plus this document (nothing of upstream `main` is missing from this fork) |
+| **Diff** | +3769 / −567 across 31 files |
 | **New dependencies** | none — `requirements.txt` and `install.py` untouched |
 | **Repo** | `https://github.com/wogreene/TagLab`, branch `main` |
 
@@ -42,6 +42,13 @@ Each entry is labelled:
 | Data panel formatted by position, not by name | ADOPT | `5fd62a2` |
 | Labels panel column widths | ADOPT | `3b0f277` |
 | Labels panel icons undersized and left-aligned | ADOPT | `2fcd8b0` |
+| Co-registration ran out of memory on a large map | ADOPT | `131cde8` |
+| Co-registered map clipped to the original canvas | ADOPT | `9591444` |
+| A coarser DEM moved by the wrong amount | ADOPT | `48071fe` |
+| Aligned copies written uncompressed | ADOPT | `27ea9cb` |
+| Alignment preview black on a large map | ADOPT | `5ed5d6e` |
+| Displaying a DEM cost 52 bytes a pixel | ADOPT | `2f2a759` |
+| DEM nodata painted instead of left clear | ADOPT | `3d64843` |
 | Keyboard labelling from the data table | ADOPT | `5f2f776` |
 | Save prompt only when something changed | ADOPT | `c74d13f` |
 | Ask before discarding unsaved work | ADOPT | `ae4379d` |
@@ -445,6 +452,149 @@ it.
 
 Also stops handing back a pixmap with a live `QPainter` still attached to it, which the old drawing
 code did on every repaint.
+
+---
+
+## Co-registration
+
+Five defects in the alignment tool, found bringing a second timepoint into a project. All of
+them bite harder the larger the map is, which is probably why they have survived.
+
+### It ran out of memory on a large map — ADOPT (`131cde8`)
+
+`Image.__updateChannel` padded the map, shifted it back by the padding, then rotated and
+translated it. That is three full-size copies, and the last two are `float64` because that is
+what `skimage.warp` returns whatever went in. Four bands at 26165x28364 come to 22.1 GB each,
+and the cast back to the map's own dtype only happened at the end, after both had been built.
+Confirming an alignment on a 28000 px map died in numpy asking for 22 GB in one allocation.
+
+The two transforms compose into one, so there is now a single resampling rather than two — the
+map was being interpolated twice, which blurred it as well as costing the memory. Applying that
+single affine a band at a time, into an output of the map's own dtype, holds two bands instead
+of the whole map.
+
+| 12000x11000 map, 13600x12900 output | |
+|---|---|
+| Old, per allocation | 5.2 GB, and it built two |
+| New, peak above baseline | 0.70 GB, 4.3 bytes per output pixel |
+
+Verified identical to the code it replaces at rotations from -33 to 180 degrees, with and
+without translation and borders. End to end the two differ by at most 1, because the old code
+truncated the float back to uint8 where this rounds.
+
+One detail that matters: a band read on its own carries a two pixel margin. Bilinear sampling
+just outside the data has to blend with the padding the way it did when the padding was really
+there; with nothing to blend against it returns the fill value and eats a pixel off every edge -
+94 pixels of 3996 in the case that caught it.
+
+### The co-registered map was clipped to the original canvas — ADOPT (`9591444`)
+
+The borders the new raster is grown by came from the bounding box of the map's **regions** after
+transforming them. A map being brought in to be co-registered has no regions on it yet, so that
+box starts at 1e9, collapses to a rectangle of negative size, and drives all four borders to
+zero. The rotated map is then written into a canvas the size of the original and everything the
+rotation swings outside it is lost. Even with regions on it the corners of the map reach further
+than they do.
+
+The borders now come from the four corners of the map, transformed the same way, with the
+regions kept in the union in case any sit outside it, and rounded outwards.
+
+| 3000x2400 map, rotated 12 degrees and shifted | Borders | Corners kept | Map retained |
+|---|---|---|---|
+| Regions only, none present | 0, 0, 0, 0 | 2 of 4 | 73.4% |
+| Map corners included | 0, 574, 714, 0 | 4 of 4 | 100% |
+
+On a 40000x38000 map at 3 to 25 degrees, one to three corners used to fall outside the canvas.
+
+### A coarser DEM was moved by the wrong amount — ADOPT (`48071fe`)
+
+This one only bites once a DEM is allowed its own resolution, so it pairs with `73bb9f5` above.
+
+The alignment is expressed in ortho pixels - the borders, the translation and the geotransform
+stamped on the result all are - and every channel was handed those numbers as they stood. A DEM
+four times coarser was therefore moved four times too far, grown by four times too much, and
+given the ortho's pixel size. It landed a long way from the map it had just been aligned to, and
+the compatibility check refused it with "the DEM only covers 9% of the map" - the check doing its
+job on a channel that had been mistransformed.
+
+Each channel is now moved by the same ground rather than the same count of pixels. A channel on
+the ortho's own grid spans one and comes out exactly as before. The copy also took its width and
+height from whichever channel happened to be last round the loop, so a coarser DEM redefined the
+pixel grid the annotations live in; only channels on the ortho's grid set it now.
+
+On a 3000x2400 ortho at 2 mm with a 750x600 DEM at 8 mm: the DEM comes out 894x778 against the
+ortho's 3574x3114, the ratio of four it started with, covering 99.9% of the aligned ortho with
+origins agreeing to half a DEM pixel.
+
+### Aligned copies were written uncompressed — ADOPT (`27ea9cb`)
+
+Whatever they were made from. On a JPEG-compressed orthomosaic that turns a 41 KB map into a
+20 MB one, and a co-registration produces two of them. The source's compression, tiling and
+interleave are now carried across; anything the driver will not accept for the data being
+written is dropped and the write retried, since JPEG cannot hold a float DEM.
+
+Worth knowing if you adopt this: GDAL reports JPEG with a YCbCr colour space as `YCbCr JPEG`,
+which is not a name the writer takes, so the two halves have to be given separately. The
+original JPEG quality is not recorded in the file, and the map is resampled and so re-encoded
+whatever happens, so 90 is used where nothing says otherwise.
+
+### The preview was black on a large map — ADOPT (`5ed5d6e`)
+
+The preview shown before confirming uploads both maps as OpenGL textures at full resolution. A
+map past the card's maximum texture size cannot be uploaded - the texture comes back empty and
+there is nothing to sample, so the preview showed black with only the markers drawn over it. The
+viewers in the earlier stage of the tool are ordinary raster views and were never affected,
+which is why only that window went dark.
+
+The textures now get a copy no larger than 8192 px, and no larger than the limit the card
+reports. Nothing else moves: the preview samples in normalised coordinates and is handed the
+real map sizes separately. The copy is point-sampled rather than going through `QImage.scaled`,
+which on an ARGB32 map converts the whole thing to premultiplied form first.
+
+---
+
+## Displaying a DEM
+
+### It cost 52 bytes a pixel — ADOPT (`2f2a759`)
+
+Against the 8 the result is actually kept in. Everything existed full size and in floating point
+at once: a cast copy of the elevations, the two gradients, the surface normal, the shading
+before and after `nan_to_num`, the depth index, the coloured image, that image again multiplied
+by the shading, and a fourth copy on the way into the QImage.
+
+Rendering into the buffer a band at a time drops it to 11, and is quicker. The bands overlap by
+a row so the gradient at a seam is the gradient it would have had in one pass, and the buffer is
+the same kind the RGB channel allocates - backed by a scratch file once it is large enough.
+
+| 9000x8000 DEM | Before | After |
+|---|---|---|
+| Peak | 52.2 B/px | 11.3 B/px |
+| Time | 4.3 s | 3.0 s |
+| Held afterwards | 8 B/px | 8 B/px |
+
+One trap worth passing on: the depth percentiles the ramp is stretched over tolerate a strided
+sample, but the gradient reference an unreferenced DEM is normalised by does not - striding
+smooths the field and reports a gentler slope than the DEM has, which came out as a visibly
+different image. That one is taken from full-resolution bands spread down the raster instead.
+
+Checked against the previous renderer on georeferenced and unreferenced DEMs, with and without
+nodata, taller and shorter than one band: no pixel differs by more than 4 of 255.
+
+### Nodata was painted instead of left clear — ADOPT (`3d64843`)
+
+A DEM was built as an `RGB32` image, which has no alpha to respect. Nodata was already being
+written with an alpha of zero, and `RGB32` painted it black rather than letting the background
+through the way an RGB map's nodata margin does. It is an `ARGB32` image now.
+
+The same commit fixes a worse version of this after co-registration. The transform filled
+everything outside the map with the channel's nodata value, but a channel only learns that value
+when it is first displayed and holds `None` until then, so an alignment run before ever opening
+the DEM filled with zero instead. Zero is a plausible elevation, and a shallow one against a
+reef at eight metres, so the depth ramp coloured the whole margin at its shallow end. The fill
+and the nodata the copy declares now come from the file being transformed.
+
+> **A DEM aligned before this fix carries zeros rather than nodata** and will still show them.
+> Those copies have to be made again; the fix cannot repair what is already written.
 
 ---
 
