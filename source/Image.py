@@ -10,6 +10,7 @@ from skimage.transform import warp, AffineTransform
 import rasterio as rio
 import pandas as pd
 import numpy as np
+from scipy import ndimage as ndi
 import os
 import cv2
 
@@ -423,46 +424,65 @@ class Image(object):
         # Create new filename
         filename, _ = os.path.splitext(channel.filename)
         ext = ".png" if channel.type == "RGB" and geoRef is None else ".tiff"
-        # [CV2] newFilename = filename + tag + ext
-        newFilename = filename + tag + ext  # TODO: always '.tiff' / '.png' (for color channel with no geo-ref)
-        # Read "reference" image
-        # [CV2] img = cv2.imread(channel.filename, cv2.IMREAD_COLOR)
-        imgData = rio.open(channel.filename).read()
-        img = np.moveaxis(imgData, 0, -1)  # Since rasterio is channel-first
-        # Add border
-        # [CV2] img = cv2.copyMakeBorder(img, topB, bottomB, leftB, rightB, cv2.BORDER_CONSTANT, None, [0, 0, 0])
+        newFilename = filename + tag + ext
+
         padding = channel.nodata if channel.nodata is not None else 0
-        img = np.pad(img, ((topB, bottomB), (leftB, rightB), (0, 0)), constant_values=[padding])
-        # [CV2] # Transform: Borders
-        # [CV2] RTMat = cv2.getRotationMatrix2D((leftB, topB), rot, 1.0)
-        # [CV2] RTMat[0, 2] += tra[0]
-        # [CV2] RTMat[1, 2] += tra[1]
-        # Transform: Rot + Tra
-        # [CV2] img = cv2.warpAffine(img, RTMat, (w, h))
-        transformation = AffineTransform(scale=1.0, rotation=0, translation=(-leftB, -topB))
-        img = warp(img, transformation.inverse, preserve_range=True)
-        transformation = AffineTransform(scale=1.0, rotation=math.radians(-rot), translation=(tra[0] + leftB, tra[1] + topB))
-        img = warp(img, transformation.inverse, preserve_range=True)
-        # Save with newly created filename
-        # [CV2] cv2.imwrite(newFilename, img)
-        img = np.moveaxis(img, -1, 0)  # Since rasterio is channel-first
-        # Update sizes
-        (c, h, w) = img.shape
-        # For geo-references
-        # mat1 = rio.transform.Affine.rotation(rot)
-        # mat2 = rio.transform.Affine.translation(tra[0], tra[1])
-        # geoMat = mat2 * mat1
-        geoMat = rio.transform.Affine.translation(-leftB + rightB, -topB + bottomB)
-        img = img.astype(imgData.dtype)
-        if ext == ".png":
-            with rio.open(newFilename, "w", driver='PNG', width=w, height=h, dtype=img.dtype, count=c) as dest:
-                dest.write(img)
-        else:
-            with rio.open(newFilename, "w", driver='GTiff', width=w, height=h, dtype=img.dtype, count=c) as dest:
-                dest.write(img)
-                if geoRef is not None:
-                    dest.nodata = channel.nodata
-                    dest.crs = geoRef
-                    dest.transform = geoTransform * geoMat
+
+        # This used to pad the map, shift it back by the padding, then rotate and
+        # translate it - three full-size copies, the last two of them float64 because
+        # that is what skimage.warp returns whatever went in. Aligning a 28000 px map
+        # asked for 22 GB in a single allocation and died there.
+        #
+        # The two transforms compose into one, and applying it a band at a time into an
+        # output of the map's own dtype holds two bands rather than the whole map.
+        # Checked against the code it replaces: identical to floating point noise.
+        t1 = AffineTransform(scale=1.0, rotation=0, translation=(-leftB, -topB))
+        t2 = AffineTransform(scale=1.0, rotation=math.radians(-rot),
+                             translation=(tra[0] + leftB, tra[1] + topB))
+        inverse_map = np.linalg.inv((t1 + t2).params)
+
+        # ndimage reads the input at matrix @ output + offset, in (row, col) rather
+        # than the (x, y) the transforms are built in, hence the swap.
+        matrix = np.array([[inverse_map[1, 1], inverse_map[1, 0]],
+                           [inverse_map[0, 1], inverse_map[0, 0]]])
+
+        # A band is read on its own rather than out of a padded copy of the map, so it
+        # carries a margin: bilinear sampling just outside the data has to blend with
+        # the padding the way it did before, and with nothing there it would return the
+        # fill value instead and eat a pixel off every edge.
+        MARGIN = 2
+        offset = np.array([inverse_map[1, 2] + MARGIN - topB,
+                           inverse_map[0, 2] + MARGIN - leftB])
+
+        with rio.open(channel.filename) as src:
+            count, dtype = src.count, src.dtypes[0]
+            h = src.height + topB + bottomB
+            w = src.width + leftB + rightB
+
+            profile = {
+                "driver": "PNG" if ext == ".png" else "GTiff",
+                "width": w, "height": h, "count": count, "dtype": dtype,
+            }
+            geoMat = rio.transform.Affine.translation(-leftB + rightB, -topB + bottomB)
+
+            # given to the writer up front rather than set afterwards, which opened the
+            # file as un-georeferenced and warned about it every time
+            if ext != ".png" and geoRef is not None:
+                profile["crs"] = geoRef
+                profile["transform"] = geoTransform * geoMat
+                profile["nodata"] = channel.nodata
+
+            with rio.open(newFilename, "w", **profile) as dest:
+
+                for band in range(1, count + 1):
+                    data = np.pad(src.read(band), ((MARGIN, MARGIN), (MARGIN, MARGIN)),
+                                  constant_values=padding)
+                    out = np.empty((h, w), dtype=dtype)
+                    ndi.affine_transform(data, matrix, offset=offset,
+                                         output_shape=(h, w), output=out,
+                                         order=1, mode="constant", cval=padding)
+                    dest.write(out, band)
+                    del data, out
+
         # Return (resource path, width, height)
         return newFilename, w, h
