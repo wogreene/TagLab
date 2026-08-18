@@ -425,6 +425,47 @@ class Image(object):
         # Result
         return cpy
 
+    def __creationOptions(self, src):
+        """
+        How the source raster is stored, so the aligned copy is written the same way.
+
+        Without this an aligned copy came out uncompressed, which on a JPEG-compressed
+        orthomosaic is an enormous file for no gain. The compression, its quality and
+        the tiling are carried across; anything the driver will not accept for the data
+        being written is dropped rather than failing the alignment.
+        """
+
+        options = {}
+
+        structure = src.tags(ns="IMAGE_STRUCTURE")
+        compression = structure.get("COMPRESSION", "")
+        name = compression.upper()
+
+        if "JPEG" in name:
+            # reported as "YCbCr JPEG" when the colour space is YCbCr, which is not a
+            # name the writer accepts - the two halves have to be given separately
+            options["compress"] = "JPEG"
+            if "YCBCR" in name or structure.get("SOURCE_COLOR_SPACE") == "YCbCr":
+                options["photometric"] = "YCbCr"
+            # the original quality is not recorded in the file, and the map is being
+            # resampled and so re-encoded whatever happens; 90 keeps that cheap
+            options["jpeg_quality"] = int(structure.get("JPEG_QUALITY", 90))
+        elif compression:
+            options["compress"] = compression
+            predictor = structure.get("PREDICTOR")
+            if predictor:
+                options["predictor"] = int(predictor)
+
+        profile = src.profile
+        if profile.get("tiled"):
+            options["tiled"] = True
+            options["blockxsize"] = profile.get("blockxsize", 256)
+            options["blockysize"] = profile.get("blockysize", 256)
+        if profile.get("interleave"):
+            options["interleave"] = profile["interleave"]
+
+        return options
+
     def __channelSpan(self, channel):
         """
         How many of the ortho's pixels one of this channel's covers. One for a channel on
@@ -499,6 +540,8 @@ class Image(object):
                 "driver": "PNG" if ext == ".png" else "GTiff",
                 "width": w, "height": h, "count": count, "dtype": dtype,
             }
+            if ext != ".png":
+                profile.update(self.__creationOptions(src))
             geoMat = rio.transform.Affine.translation(-leftB + rightB, -topB + bottomB)
 
             # given to the writer up front rather than set afterwards, which opened the
@@ -508,7 +551,17 @@ class Image(object):
                 profile["transform"] = geoTransform * geoMat
                 profile["nodata"] = channel.nodata
 
-            with rio.open(newFilename, "w", **profile) as dest:
+            # JPEG cannot hold a float DEM, and some band counts it will not take
+            # either, so a copied setting that does not suit what is being written is
+            # dropped rather than stopping the alignment.
+            try:
+                writer = rio.open(newFilename, "w", **profile)
+            except Exception:
+                for key in ("compress", "jpeg_quality", "photometric", "interleave"):
+                    profile.pop(key, None)
+                writer = rio.open(newFilename, "w", **profile)
+
+            with writer as dest:
 
                 for band in range(1, count + 1):
                     data = np.pad(src.read(band), ((MARGIN, MARGIN), (MARGIN, MARGIN)),
