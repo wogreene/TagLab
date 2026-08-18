@@ -398,14 +398,50 @@ class Image(object):
             cpy.annotations.addBlob(blob)
         # Add channels
         for ch in self.channels:
-            newFilename, w, h = self.__updateChannel(ch, tag, -rot, tra, borders, geoTransform, geoRef)
-            # Update dimensions
-            cpy.width = w
-            cpy.height = h
+            # A DEM does not have to share the ortho's grid. The alignment is expressed
+            # in ortho pixels - the borders, the translation and the geotransform all
+            # are - so a channel on a coarser grid has to be given the same movement
+            # counted in its own pixels, and a geotransform carrying its own pixel size.
+            # Handed the ortho's numbers as they stand it came out the wrong size in the
+            # wrong place, and was then refused for covering a few percent of the map it
+            # had just been aligned to.
+            span = self.__channelSpan(ch)
+            ch_borders = [int(round(b / span)) for b in borders]
+            ch_tra = np.array([tra[0] / span, tra[1] / span])
+            ch_geo = geoTransform
+            if ch_geo is not None and span != 1.0:
+                ch_geo = ch_geo * rio.transform.Affine.scale(span)
+
+            newFilename, w, h = self.__updateChannel(ch, tag, -rot, ch_tra, ch_borders,
+                                                     ch_geo, geoRef)
+            # The ortho defines the pixel grid the annotations live in, so a DEM on a
+            # coarser grid must not redefine it - it used to, whenever it was the last
+            # channel round the loop.
+            if ch.type != "DEM":
+                cpy.width = w
+                cpy.height = h
             # Add transformed channel
             cpy.addChannel(newFilename, ch.type)
         # Result
         return cpy
+
+    def __channelSpan(self, channel):
+        """
+        How many of the ortho's pixels one of this channel's covers. One for a channel on
+        the ortho's own grid, larger for a DEM at a coarser resolution.
+        """
+
+        if not self.width:
+            return 1.0
+
+        try:
+            with rio.open(channel.filename) as probe:
+                if probe.width:
+                    return self.width / float(probe.width)
+        except Exception:
+            pass
+
+        return 1.0
 
     def __updateChannel(self, channel, tag, rot, tra, borders, geoTransform=None, geoRef=None):
         """
