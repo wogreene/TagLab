@@ -333,6 +333,153 @@ def depthRampLookupTable():
     return lut
 
 
+def hillshadeRampStatistics(z, nodata, px_x, px_y, target_samples=4000000):
+    """
+    The two numbers the whole-DEM view needs before any of it can be drawn: the depth
+    range the colour ramp is stretched over, and - when the DEM is unreferenced - the
+    gradient magnitude the shading is normalised by.
+
+    Depth percentiles are taken from a strided sample, which they tolerate: the answer
+    moves by far less than a colour step, and taking them from the whole raster meant
+    sorting a copy of it. The gradient reference is not, because striding smooths the
+    field and would report a gentler slope than the DEM has; it comes from a handful of
+    full-resolution bands spread down the raster instead.
+    """
+
+    h, w = z.shape[0], z.shape[1]
+    count = h * w
+    step = 1 if count <= target_samples else max(1, int(math.sqrt(count / float(target_samples))))
+
+    def cleaned(block):
+        block = np.asarray(block, dtype=np.float32)
+        if nodata is not None and not (isinstance(nodata, float) and math.isnan(nodata)):
+            block = np.where(block == nodata, np.float32(np.nan), block)
+        return block
+
+    sub = cleaned(z[::step, ::step])
+    finite = np.isfinite(sub)
+    if not finite.any():
+        return None, None, None
+
+    lo, hi = np.percentile(sub[finite], (2.0, 98.0))
+    del sub, finite
+
+    reference = None
+    if not (px_x and px_y):
+        BANDS, BAND_ROWS = 8, 128
+        magnitudes = []
+        stride = max(BAND_ROWS, h // BANDS)
+        for y0 in range(0, h, stride):
+            band = cleaned(z[y0:min(y0 + BAND_ROWS, h)])
+            if band.shape[0] < 2:
+                continue
+            gy, gx = np.gradient(band)
+            m = np.sqrt(gx * gx + gy * gy)
+            m = m[np.isfinite(m)]
+            if m.size:
+                magnitudes.append(m)
+        if magnitudes:
+            value = float(np.percentile(np.concatenate(magnitudes), 90))
+            reference = value if value > 0.0 else None
+
+    return float(lo), float(hi), reference
+
+
+def renderHillshadeInto(out, floatmap, nodata=float('NaN'), px_x=None, px_y=None,
+                        azimuth=315.0, altitude=45.0, ambient=0.35, stripe_rows=512):
+    """
+    Draw a DEM into an existing (h, w, 4) byte buffer, a band of rows at a time.
+
+    Rendering the whole raster at once needed some fifty bytes for every pixel of it -
+    the gradients, the surface normal, the shading and the coloured image all existed
+    full-size and in floating point at the same time, against the eight bytes per pixel
+    the result is actually kept in. A band at a time costs that only for the band, and
+    lets the caller hand in a buffer that can be backed by a file.
+
+    See floatmapToHillshadeQImage for what is being drawn and why.
+    """
+
+    h, w = floatmap.shape[0], floatmap.shape[1]
+
+    lo, hi, reference = hillshadeRampStatistics(floatmap, nodata, px_x, px_y)
+    if lo is None:
+        out[:] = 0
+        out[:, :, 3] = 255
+        return
+
+    az, alt = np.radians(azimuth), np.radians(altitude)
+    lx = math.cos(alt) * math.sin(az)
+    ly = -math.cos(alt) * math.cos(az)
+    lz = math.sin(alt)
+
+    ramp = depthRampLookupTable()
+    span = (255.0 / (hi - lo)) if hi > lo else 0.0
+    has_nodata = nodata is not None and not (isinstance(nodata, float) and math.isnan(nodata))
+
+    for y0 in range(0, h, stripe_rows):
+        y1 = min(y0 + stripe_rows, h)
+
+        # one row of overlap either side, so the gradient at the seam is the gradient it
+        # would have had in one pass rather than an edge
+        a, b = max(0, y0 - 1), min(h, y1 + 1)
+        z = np.asarray(floatmap[a:b], dtype=np.float32)
+        if z.base is floatmap or z is floatmap[a:b]:
+            z = z.copy()
+
+        if has_nodata:
+            z[z == nodata] = np.nan
+        z[~np.isfinite(z)] = np.nan
+        valid = np.isfinite(z)
+
+        if px_x and px_y:
+            gy, gx = np.gradient(z, np.float32(px_y), np.float32(px_x))
+        else:
+            gy, gx = np.gradient(z)
+            if reference:
+                gx /= np.float32(reference)
+                gy /= np.float32(reference)
+
+        norm = gx * gx
+        norm += gy * gy
+        norm += 1.0
+        np.sqrt(norm, out=norm)
+
+        shade = gx * np.float32(-lx)
+        shade -= gy * np.float32(ly)
+        shade += np.float32(lz)
+        shade /= norm
+        np.clip(shade, 0.0, 1.0, out=shade)
+        # a pixel whose neighbour is nodata has no gradient and so no shade; light it
+        # flatly rather than letting it punch a black hole along the survey edge
+        shade[~np.isfinite(shade)] = 1.0
+        shade *= np.float32(1.0 - ambient)
+        shade += np.float32(ambient)
+
+        index = np.zeros(z.shape, dtype=np.uint8)
+        if span:
+            scaled = z - np.float32(lo)
+            scaled *= np.float32(span)
+            np.clip(scaled, 0.0, 255.0, out=scaled)
+            # nodata is NaN here, and casting that to an integer is undefined and warns
+            scaled[~valid] = 0.0
+            np.copyto(index, scaled.astype(np.uint8), where=valid)
+
+        colour = ramp[index].astype(np.float32)
+        colour *= shade[:, :, np.newaxis]
+
+        top = y0 - a
+        rows = y1 - y0
+        chunk = colour[top:top + rows]
+        keep = valid[top:top + rows]
+
+        # the buffer is BGRA, which is what QImage reads on a little-endian machine
+        out[y0:y1, :, 2] = chunk[:, :, 0]
+        out[y0:y1, :, 1] = chunk[:, :, 1]
+        out[y0:y1, :, 0] = chunk[:, :, 2]
+        out[y0:y1, :, 3] = 255
+        out[y0:y1][~keep] = 0
+
+
 def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=None,
                               azimuth=315.0, altitude=45.0, ambient=0.35):
     """
@@ -350,65 +497,15 @@ def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=Non
 
     ambient is how much colour survives in full shadow; at 0 the unlit faces go black and the
     depth becomes unreadable there. Nodata is left black.
+
+    Allocates its own buffer. Channel hands renderHillshadeInto one that can be file-backed.
     """
 
-    h = floatmap.shape[0]
-    w = floatmap.shape[1]
+    h, w = floatmap.shape[0], floatmap.shape[1]
+    buffer = np.empty((h, w, 4), dtype=np.uint8)
+    renderHillshadeInto(buffer, floatmap, nodata, px_x, px_y, azimuth, altitude, ambient)
 
-    z = floatmap.astype(np.float32, copy=True)
-    if nodata is not None and not (isinstance(nodata, float) and math.isnan(nodata)):
-        z[z == nodata] = np.nan
-    z[~np.isfinite(z)] = np.nan
-
-    valid = np.isfinite(z)
-    if not valid.any():
-        return rgbToQImage(np.zeros([h, w, 3], dtype=np.uint8))
-
-    if px_x and px_y:
-        gy, gx = np.gradient(z, np.float32(px_y), np.float32(px_x))
-    else:
-        gy, gx = np.gradient(z)
-        # no scale to work from: normalise so that typical relief reads as a moderate slope
-        magnitude = np.sqrt(gx * gx + gy * gy)
-        finite = np.isfinite(magnitude)
-        reference = np.percentile(magnitude[finite], 90) if finite.any() else 0.0
-        if reference > 0.0:
-            gx /= reference
-            gy /= reference
-
-    # surface normal is (-gx, -gy, 1) normalised; array rows run north to south, so the light's
-    # northward component points at -y
-    az = np.radians(azimuth)
-    alt = np.radians(altitude)
-    lx = math.cos(alt) * math.sin(az)
-    ly = -math.cos(alt) * math.cos(az)
-    lz = math.sin(alt)
-
-    norm = np.sqrt(gx * gx + gy * gy + 1.0)
-    shade = (-gx * lx - gy * ly + lz) / norm
-    np.clip(shade, 0.0, 1.0, out=shade)
-
-    # a pixel with a valid elevation but a nodata neighbour has no gradient, so its shade is
-    # NaN; light those flatly rather than letting them punch black holes along the edge
-    shade = np.nan_to_num(shade, nan=1.0, posinf=1.0, neginf=1.0)
-
-    # depth to colour, over the middle 96% so that a single spike cannot flatten the ramp
-    lo, hi = np.percentile(z[valid], (2.0, 98.0))
-    index = np.zeros((h, w), dtype=np.uint8)
-    if hi > lo:
-        scaled = (z - lo) * (255.0 / (hi - lo))
-        np.clip(scaled, 0.0, 255.0, out=scaled)
-        index[valid] = scaled[valid].astype(np.uint8)
-
-    img = depthRampLookupTable()[index]
-
-    # relief over the top, kept away from zero so colour still reads on unlit faces
-    shade = ambient + (1.0 - ambient) * shade
-    img = (img * shade[:, :, np.newaxis]).astype(np.uint8)
-
-    img[~valid] = 0
-
-    return rgbToQImage(img)
+    return QImage(buffer.data, w, h, w * 4, QImage.Format_RGB32).copy()
 
 
 def floatmapToQImage(floatmap, nodata = float('NaN')):

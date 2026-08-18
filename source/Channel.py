@@ -136,15 +136,27 @@ class Channel(object):
         # typically the depth map is stored in a 32-bit Tiff
         if self.type == "DEM":
             with rio.open(filename) as dem:
-                self.float_map = dem.read(1).astype(np.float32)
                 self.nodata = dem.nodata
                 px_x, px_y = self.groundPixelSize(dem)
+                h, w = dem.height, dem.width
+                # read straight into the array that is kept, rather than reading one and
+                # then casting it into another
+                self.float_map = np.empty((h, w), dtype=np.float32)
+                dem.read(1, out=self.float_map)
 
             # shaded relief rather than a flat grey ramp: on a reef DEM the depth range is
             # metres while the structure of interest is centimetres, so a global stretch
-            # leaves the detail invisible
-            self.qimage = genutils.floatmapToHillshadeQImage(self.float_map, self.nodata,
-                                                             px_x, px_y)
+            # leaves the detail invisible.
+            #
+            # Drawn a band of rows at a time into the same kind of buffer the RGB channel
+            # uses, so a large DEM can be backed by a scratch file and the intermediates
+            # only ever exist for one band.
+            buffer = self.allocatePixelBuffer(h, w)
+            genutils.renderHillshadeInto(buffer, self.float_map, self.nodata, px_x, px_y)
+
+            # keep a reference: QImage points at this memory instead of copying it
+            self._pixel_buffer = buffer
+            self.qimage = QImage(buffer.data, w, h, w * 4, QImage.Format_RGB32)
 
         return self.qimage
 
