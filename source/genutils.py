@@ -505,7 +505,7 @@ def floatmapToHillshadeQImage(floatmap, nodata=float('NaN'), px_x=None, px_y=Non
     buffer = np.empty((h, w, 4), dtype=np.uint8)
     renderHillshadeInto(buffer, floatmap, nodata, px_x, px_y, azimuth, altitude, ambient)
 
-    return QImage(buffer.data, w, h, w * 4, QImage.Format_RGB32).copy()
+    return QImage(buffer.data, w, h, w * 4, QImage.Format_ARGB32).copy()
 
 
 def floatmapToQImage(floatmap, nodata = float('NaN')):

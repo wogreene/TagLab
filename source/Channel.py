@@ -156,7 +156,10 @@ class Channel(object):
 
             # keep a reference: QImage points at this memory instead of copying it
             self._pixel_buffer = buffer
-            self.qimage = QImage(buffer.data, w, h, w * 4, QImage.Format_RGB32)
+            # ARGB32, not RGB32: nodata is written with an alpha of zero so it drops out
+            # of the view entirely and the background shows through, the way a nodata
+            # margin does on an RGB map. RGB32 ignores the alpha and paints it black.
+            self.qimage = QImage(buffer.data, w, h, w * 4, QImage.Format_ARGB32)
 
         return self.qimage
 

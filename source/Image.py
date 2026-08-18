@@ -503,7 +503,10 @@ class Image(object):
         ext = ".png" if channel.type == "RGB" and geoRef is None else ".tiff"
         newFilename = filename + tag + ext
 
-        padding = channel.nodata if channel.nodata is not None else 0
+        # Taken from the file rather than from the channel, which only learns its nodata
+        # value when the channel is first displayed and is None until then. Filling a DEM
+        # with zero instead of its nodata puts a plausible, very shallow elevation
+        # everywhere outside the data, which the depth ramp then colours in.
 
         # This used to pad the map, shift it back by the padding, then rotate and
         # translate it - three full-size copies, the last two of them float64 because
@@ -533,6 +536,10 @@ class Image(object):
 
         with rio.open(channel.filename) as src:
             count, dtype = src.count, src.dtypes[0]
+
+            padding = src.nodata
+            if padding is None:
+                padding = channel.nodata if channel.nodata is not None else 0
             h = src.height + topB + bottomB
             w = src.width + leftB + rightB
 
@@ -546,10 +553,12 @@ class Image(object):
 
             # given to the writer up front rather than set afterwards, which opened the
             # file as un-georeferenced and warned about it every time
-            if ext != ".png" and geoRef is not None:
-                profile["crs"] = geoRef
-                profile["transform"] = geoTransform * geoMat
-                profile["nodata"] = channel.nodata
+            if ext != ".png":
+                if src.nodata is not None:
+                    profile["nodata"] = src.nodata
+                if geoRef is not None:
+                    profile["crs"] = geoRef
+                    profile["transform"] = geoTransform * geoMat
 
             # JPEG cannot hold a float DEM, and some band counts it will not take
             # either, so a copied setting that does not suit what is being written is
