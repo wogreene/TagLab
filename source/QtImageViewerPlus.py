@@ -778,10 +778,6 @@ class QtImageViewerPlus(QtImageViewer):
         super(QtImageViewerPlus, self).updateViewer()
         self.updateAnnotationScale()
 
-    def wheelEvent(self, event):
-        super(QtImageViewerPlus, self).wheelEvent(event)
-        self.updateAnnotationScale()
-
     def enableIds(self):
 
         # still subject to the zoom: turning ids on while zoomed out should not strew
@@ -1451,6 +1447,7 @@ class QtImageViewerPlus(QtImageViewer):
             self.centerOn(scene_pos - delta)
 
             self.updateScaleBar(self.zoom_factor)
+            self.updateAnnotationScale()
 
             self.scene_overlay.invalidate()
             self.invalidateScene()
