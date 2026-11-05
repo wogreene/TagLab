@@ -128,7 +128,7 @@ class QtImageViewerPlus(QtImageViewer):
     # between these bounds and stops at them, so it is always findable and never in the
     # way.
     POINT_MIN_ON_SCREEN = 6.0
-    POINT_MAX_ON_SCREEN = 20.0
+    POINT_MAX_ON_SCREEN = 34.0
 
     # The zoom range the sizes ramp across, as a factor from map pixels to screen
     # pixels. A mark whose size follows the zoom directly and is then clipped spends
@@ -150,7 +150,7 @@ class QtImageViewerPlus(QtImageViewer):
     # size rather than the map's: a label is still interface, it is just larger
     # interface when the view is close in.
     LABEL_SCALE_MIN = 1.0
-    LABEL_SCALE_MAX = 1.7
+    LABEL_SCALE_MAX = 2.4
 
     # Labels appear once the point marks would be at least this many pixels across.
     # Expressed against the marks rather than against the zoom so that it means the
