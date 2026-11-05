@@ -79,7 +79,7 @@ class TextItem(QGraphicsSimpleTextItem):
     # coordinates. White text on an orthomosaic is legible over dark coral and invisible
     # over bright sand, and the same label crosses both; an outline is what a GIS calls
     # a buffer and is the reason map labels can be read over anything.
-    BUFFER_WIDTH = 1.6
+    BUFFER_WIDTH = 1.1
 
     def bufferColour(self):
         """Black behind light text, white behind dark, since the ids are recolourable."""
