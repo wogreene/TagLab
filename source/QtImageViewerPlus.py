@@ -106,6 +106,26 @@ class QtImageViewerPlus(QtImageViewer):
     The input image (it must be a QImage) is internally converted into a QPixmap.
     """
 
+    # How large a point mark and an id label are allowed to be on screen, in screen
+    # pixels, whatever the zoom.
+    #
+    # These are drawn in scene units - a mark twenty image pixels across - which is the
+    # same as not choosing a size at all: on a 40000 px map zoomed to fit, twenty image
+    # pixels is a quarter of a screen pixel and the points cannot be seen; zoomed in to
+    # inspect a colony the same mark is half the window. The mark follows the zoom
+    # between these bounds and stops at them, so it is always findable and never in the
+    # way.
+    POINT_MIN_ON_SCREEN = 7.0
+    POINT_MAX_ON_SCREEN = 30.0
+
+    # Labels are text, so below a certain height on screen they are not small - they are
+    # illegible, and a map strewn with unreadable marks is worse than one without them.
+    LABEL_HIDE_BELOW = 9.0
+    LABEL_MAX_ON_SCREEN = 22.0
+
+    # the scene size the point mark is built at
+    POINT_SCENE_DIAMETER = 20.0
+
     # Mouse button signals emit image scene (x, y) coordinates.
     leftMouseButtonPressed = pyqtSignal(float, float)
     rightMouseButtonPressed = pyqtSignal(float, float)
@@ -164,7 +184,13 @@ class QtImageViewerPlus(QtImageViewer):
         # DRAWING SETTINGS
         self.fill_enabled = True
         self.border_enabled = True
-        self.ids_enable = True
+        # spelled ids_enable here and ids_enabled everywhere else, so this one was
+        # written once and never read while the real flag only came into existence
+        # when the ids were first toggled
+        self.ids_enabled = True
+
+        # the zoom the point marks and labels were last sized for
+        self._scaled_at_zoom = None
 
         self.show_grid = False
 
@@ -613,6 +639,92 @@ class QtImageViewerPlus(QtImageViewer):
         else:
             self.enableBorders()
 
+    def clampedScale(self, natural_scene_size, smallest, largest):
+        """
+        How much to scale an item so that its size on screen stays within bounds.
+
+        An item of this size in scene units appears natural_scene_size * zoom pixels
+        across. Returning the ratio between the size wanted and the size it would have
+        means the item follows the zoom in the middle of the range and holds still at
+        the ends of it.
+        """
+
+        zoom = self.zoom_factor
+        if natural_scene_size <= 0.0 or zoom <= 0.0:
+            return 1.0, 0.0
+
+        on_screen = natural_scene_size * zoom
+        wanted = min(max(on_screen, smallest), largest)
+
+        return wanted / on_screen, wanted
+
+    def scalePointMark(self, annpoint):
+        """Size one point's mark and its label for the current zoom."""
+
+        scale, on_screen = self.clampedScale(self.POINT_SCENE_DIAMETER,
+                                             self.POINT_MIN_ON_SCREEN,
+                                             self.POINT_MAX_ON_SCREEN)
+
+        for item in (annpoint.ellipse_gitem, annpoint.cross1_gitem, annpoint.cross2_gitem):
+            if item is not None:
+                item.setTransformOriginPoint(QPointF(annpoint.coordx, annpoint.coordy))
+                item.setScale(scale)
+
+        if annpoint.id_item is None:
+            return
+
+        self.scaleLabel(annpoint.id_item)
+        # the label sits beside the mark rather than at a fixed distance from it, so it
+        # does not drift away from the point as the mark stops growing
+        offset = 0.75 * self.POINT_SCENE_DIAMETER * scale
+        annpoint.id_item.setPos(annpoint.coordx + offset, annpoint.coordy + offset)
+
+    def scaleLabel(self, item, visible=True):
+        """
+        Size an id label for the current zoom, and hide it when it would be too small
+        to read. visible carries whatever the caller has already decided about it.
+        """
+
+        natural = item.boundingRect().height()
+        scale, on_screen = self.clampedScale(natural, 0.0, self.LABEL_MAX_ON_SCREEN)
+        item.setTransformOriginPoint(QPointF(0.0, 0.0))
+        item.setScale(scale)
+        item.setVisible(visible and on_screen >= self.LABEL_HIDE_BELOW)
+
+    def updateAnnotationScale(self, force=False):
+        """
+        Resize the point marks and id labels after the view has zoomed.
+
+        Panning reaches here too, through the view synchronisation, and the marks do
+        not change size when the view only moves. Remembering the zoom this last ran
+        at keeps a pan free of work that would otherwise cost a pass over every point
+        on the map.
+        """
+
+        if self.image is None:
+            return
+
+        if not force and self._scaled_at_zoom == self.zoom_factor:
+            return
+
+        self._scaled_at_zoom = self.zoom_factor
+
+        for annpoint in self.image.annotations.annpoints:
+            if annpoint.ellipse_gitem is not None:
+                self.scalePointMark(annpoint)
+
+        for blob in self.image.annotations.seg_blobs:
+            if blob.id_item is not None:
+                self.scaleLabel(blob.id_item, visible=self.ids_enabled)
+
+    def updateViewer(self):
+        super(QtImageViewerPlus, self).updateViewer()
+        self.updateAnnotationScale()
+
+    def wheelEvent(self, event):
+        super(QtImageViewerPlus, self).wheelEvent(event)
+        self.updateAnnotationScale()
+
     def enableIds(self):
 
         for blob in self.annotations.seg_blobs:
@@ -744,6 +856,7 @@ class QtImageViewerPlus(QtImageViewer):
             annpoint.id_item.setOpacity(0.7)
 
         self.scene.addItem(annpoint.id_item)
+        self.scalePointMark(annpoint)
 
 
     def drawShape(self, shape, layer_type):
@@ -822,7 +935,11 @@ class QtImageViewerPlus(QtImageViewer):
         font_size = min(12, round(8.0 / self.image.pixelSize()))
         blob.id_item = TextItem(str(blob.id),  QFont("Roboto", font_size, QFont.Bold))
         blob.id_item.setPos(blob.centroid[0], blob.centroid[1])
-        blob.id_item.setTransformOriginPoint(QPointF(blob.centroid[0] + 14.0, blob.centroid[1] + 14.0))
+        # TextItem draws itself centred on its own origin, so scaling about (0, 0)
+        # grows the label in place. The origin used to be set to the centroid plus a
+        # margin, which is a point in item coordinates a long way from the text - it
+        # did no harm only because nothing ever scaled the label.
+        blob.id_item.setTransformOriginPoint(QPointF(0.0, 0.0))
         blob.id_item.setZValue(2)
         blob.id_item.setBrush(QBrush(self.label_pen_color))
 
@@ -831,6 +948,7 @@ class QtImageViewerPlus(QtImageViewer):
         else:
             blob.id_item.setOpacity(0.7)
         self.scene.addItem(blob.id_item)
+        self.scaleLabel(blob.id_item, visible=self.ids_enabled)
 
     def undrawBlob(self, blob, redraw=True):
 
