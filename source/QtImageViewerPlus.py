@@ -24,7 +24,8 @@
 import math
 import os.path
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRectF, QLineF, QFileInfo, QDir, pyqtSlot, pyqtSignal, QT_VERSION_STR
-from PyQt5.QtGui import QPen, QColor, QFont, QBrush, QPolygonF
+from PyQt5.QtGui import QPen, QColor, QFont, QBrush, QPolygonF, QPainter, \
+    QPainterPath, QFontMetricsF
 from PyQt5.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QFileDialog, QGraphicsItem, QGraphicsSimpleTextItem, QPlainTextEdit,QSizePolicy
 
 from source.Undo import Undo
@@ -74,16 +75,48 @@ class TextItem(QGraphicsSimpleTextItem):
         self.setFont(font)
         self.offset = offset if offset is not None else QPointF(0.0, 0.0)
 
+    # Half the width of the halo drawn behind the glyphs, in the item's own
+    # coordinates. White text on an orthomosaic is legible over dark coral and invisible
+    # over bright sand, and the same label crosses both; an outline is what a GIS calls
+    # a buffer and is the reason map labels can be read over anything.
+    BUFFER_WIDTH = 1.6
+
+    def bufferColour(self):
+        """Black behind light text, white behind dark, since the ids are recolourable."""
+
+        colour = self.brush().color()
+        luminance = (0.299 * colour.red() + 0.587 * colour.green()
+                     + 0.114 * colour.blue()) / 255.0
+
+        return QColor(0, 0, 0, 205) if luminance > 0.5 else QColor(255, 255, 255, 225)
+
     def paint(self, painter, option, widget):
-        painter.translate(self.boundingRect().topLeft())
-        super().paint(painter, option, widget)
-        painter.translate(-self.boundingRect().topLeft())
+        painter.save()
+        painter.translate(self.boundingRect().topLeft() +
+                          QPointF(self.BUFFER_WIDTH, self.BUFFER_WIDTH))
+
+        # the glyphs as a path, so the halo can be stroked round the outside of them
+        # rather than over them - a pen on the text itself is centred on the edge and
+        # eats into letters this small
+        path = QPainterPath()
+        path.addText(0.0, QFontMetricsF(self.font()).ascent(), self.font(), self.text())
+
+        pen = QPen(self.bufferColour(), self.BUFFER_WIDTH * 2.0)
+        pen.setJoinStyle(Qt.RoundJoin)
+        pen.setCapStyle(Qt.RoundCap)
+
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.strokePath(path, pen)
+        painter.fillPath(path, self.brush())
+        painter.restore()
 
     def boundingRect(self):
+        # grown by the halo, or the outline is clipped at the edges of the text
         b = super().boundingRect()
-        return QRectF(b.x() - b.width() / 2.0 + self.offset.x(),
-                      b.y() - b.height() / 2.0 + self.offset.y(),
-                      b.width(), b.height())
+        pad = self.BUFFER_WIDTH
+        return QRectF(b.x() - b.width() / 2.0 + self.offset.x() - pad,
+                      b.y() - b.height() / 2.0 + self.offset.y() - pad,
+                      b.width() + 2.0 * pad, b.height() + 2.0 * pad)
 
 
 class NoteWidget(QPlainTextEdit):
