@@ -21,6 +21,7 @@
     The viewer has also drawing capabilities (differently from QTimage viewer).
 """
 
+import math
 import os.path
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRectF, QLineF, QFileInfo, QDir, pyqtSlot, pyqtSignal, QT_VERSION_STR
 from PyQt5.QtGui import QPen, QColor, QFont, QBrush, QPolygonF
@@ -127,7 +128,16 @@ class QtImageViewerPlus(QtImageViewer):
     # between these bounds and stops at them, so it is always findable and never in the
     # way.
     POINT_MIN_ON_SCREEN = 6.0
-    POINT_MAX_ON_SCREEN = 16.0
+    POINT_MAX_ON_SCREEN = 20.0
+
+    # The zoom range the sizes ramp across, as a factor from map pixels to screen
+    # pixels. A mark whose size follows the zoom directly and is then clipped spends
+    # almost all of its time against one stop or the other - with a floor of 6 and a
+    # ceiling of 20 the unclipped band is only a factor of three in zoom, out of the
+    # hundred or so the viewer covers, so the marks look fixed. Ramping across the
+    # logarithm of the zoom instead spreads the growth over the whole range, which is
+    # what "follows the zoom, but not entirely" has to mean here.
+    SIZE_RAMP_ZOOM = (0.08, 8.0)
 
     # Labels are set in screen pixels and stay there. Text that grows with the zoom is
     # the thing being fixed, and a cap alone does not fix it - below the cap it still
@@ -135,6 +145,12 @@ class QtImageViewerPlus(QtImageViewer):
     # like a scale bar, so it is drawn at a size chosen for reading rather than for the
     # map, and the view transform is not applied to it at all.
     LABEL_POINT_SIZE = 9
+
+    # Labels grow with the zoom too, over the same ramp, but around their own screen
+    # size rather than the map's: a label is still interface, it is just larger
+    # interface when the view is close in.
+    LABEL_SCALE_MIN = 1.0
+    LABEL_SCALE_MAX = 1.7
 
     # Labels appear once the point marks would be at least this many pixels across.
     # Expressed against the marks rather than against the zoom so that it means the
@@ -662,31 +678,48 @@ class QtImageViewerPlus(QtImageViewer):
         else:
             self.enableBorders()
 
-    def clampedScale(self, natural_scene_size, smallest, largest):
+    def zoomRamp(self):
         """
-        How much to scale an item so that its size on screen stays within bounds.
+        Where the current zoom sits on the ramp: 0 at the far end, 1 at the near end.
 
-        An item of this size in scene units appears natural_scene_size * zoom pixels
-        across. Returning the ratio between the size wanted and the size it would have
-        means the item follows the zoom in the middle of the range and holds still at
-        the ends of it.
+        Taken on the logarithm of the zoom, because zooming is multiplicative - each
+        wheel click is a constant factor, so a constant step along this ramp is what
+        reads as a steady change in size.
         """
 
-        zoom = self.zoom_factor
-        if natural_scene_size <= 0.0 or zoom <= 0.0:
-            return 1.0, 0.0
+        low, high = self.SIZE_RAMP_ZOOM
+        zoom = max(self.zoom_factor, 1e-9)
+        if high <= low:
+            return 1.0
 
-        on_screen = natural_scene_size * zoom
-        wanted = min(max(on_screen, smallest), largest)
+        return min(1.0, max(0.0, math.log(zoom / low) / math.log(high / low)))
 
-        return wanted / on_screen, wanted
+    def markScale(self):
+        """
+        What to scale a point's mark by, and how large that leaves it on screen.
+        """
+
+        ramp = self.zoomRamp()
+        on_screen = (self.POINT_MIN_ON_SCREEN
+                     + ramp * (self.POINT_MAX_ON_SCREEN - self.POINT_MIN_ON_SCREEN))
+        natural = self.POINT_SCENE_DIAMETER * max(self.zoom_factor, 1e-9)
+
+        return on_screen / natural, on_screen
+
+    def labelScale(self):
+        """
+        What to scale an id by. The label ignores the view transform, so this is a
+        scale in screen pixels rather than a correction for the zoom.
+        """
+
+        ramp = self.zoomRamp()
+
+        return self.LABEL_SCALE_MIN + ramp * (self.LABEL_SCALE_MAX - self.LABEL_SCALE_MIN)
 
     def scalePointMark(self, annpoint):
         """Size one point's mark for the current zoom."""
 
-        scale, on_screen = self.clampedScale(self.POINT_SCENE_DIAMETER,
-                                             self.POINT_MIN_ON_SCREEN,
-                                             self.POINT_MAX_ON_SCREEN)
+        scale, _ = self.markScale()
 
         for item in (annpoint.ellipse_gitem, annpoint.cross1_gitem, annpoint.cross2_gitem):
             if item is not None:
@@ -694,6 +727,7 @@ class QtImageViewerPlus(QtImageViewer):
                 item.setScale(scale)
 
         if annpoint.id_item is not None:
+            annpoint.id_item.setScale(self.labelScale())
             annpoint.id_item.setVisible(self.labelVisibility(annpoint, False))
 
     def prepareLabel(self, item, offset=0.0):
@@ -753,9 +787,8 @@ class QtImageViewerPlus(QtImageViewer):
         self._scaled_at_zoom = self.zoom_factor
         legible = self.labelsAreLegible()
 
-        scale, _ = self.clampedScale(self.POINT_SCENE_DIAMETER,
-                                     self.POINT_MIN_ON_SCREEN,
-                                     self.POINT_MAX_ON_SCREEN)
+        scale, _ = self.markScale()
+        label_scale = self.labelScale()
 
         for annpoint in self.image.annotations.annpoints:
             for item in (annpoint.ellipse_gitem, annpoint.cross1_gitem,
@@ -764,15 +797,17 @@ class QtImageViewerPlus(QtImageViewer):
                     item.setTransformOriginPoint(QPointF(annpoint.coordx, annpoint.coordy))
                     item.setScale(scale)
             if annpoint.id_item is not None:
+                annpoint.id_item.setScale(label_scale)
                 annpoint.id_item.setVisible(self.labelVisibility(annpoint, False))
 
-        # the labels are a fixed size, so only their visibility can change with the
-        # zoom, and only when the threshold is crossed
-        if legible != self._labels_were_legible:
-            self._labels_were_legible = legible
-            for blob in self.image.annotations.seg_blobs:
-                if blob.id_item is not None:
-                    blob.id_item.setVisible(self.labelVisibility(blob, True))
+        crossed = legible != self._labels_were_legible
+        self._labels_were_legible = legible
+        for blob in self.image.annotations.seg_blobs:
+            if blob.id_item is None:
+                continue
+            blob.id_item.setScale(label_scale)
+            if crossed:
+                blob.id_item.setVisible(self.labelVisibility(blob, True))
 
     def updateViewer(self):
         super(QtImageViewerPlus, self).updateViewer()
@@ -1008,6 +1043,7 @@ class QtImageViewerPlus(QtImageViewer):
             blob.id_item.setOpacity(0.7)
         self.scene.addItem(blob.id_item)
         self.prepareLabel(blob.id_item)
+        blob.id_item.setScale(self.labelScale())
         blob.id_item.setVisible(self.labelVisibility(blob, True))
 
     def undrawBlob(self, blob, redraw=True):
