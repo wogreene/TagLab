@@ -694,7 +694,7 @@ class QtImageViewerPlus(QtImageViewer):
                 item.setScale(scale)
 
         if annpoint.id_item is not None:
-            annpoint.id_item.setVisible(self.labelsAreLegible())
+            annpoint.id_item.setVisible(self.labelVisibility(annpoint, False))
 
     def prepareLabel(self, item, offset=0.0):
         """
@@ -712,6 +712,28 @@ class QtImageViewerPlus(QtImageViewer):
         """Whether the view is close enough in for ids to be worth drawing."""
 
         return self.POINT_SCENE_DIAMETER * self.zoom_factor >= self.LABEL_SHOW_AT_MARK
+
+    def labelVisibility(self, annotation, is_region):
+        """
+        Whether this annotation's id should be on screen.
+
+        Three separate things have a say and all of them have to agree: how far the
+        view is zoomed out, whether the class is shown at all, and - for regions - the
+        ids toggle. Each used to answer on its own and the last one to run won, which
+        is why a zoomed-out map could end up strewn with ids: the zoom hid them and
+        the class visibility pass turned them straight back on.
+        """
+
+        if not self.labelsAreLegible():
+            return False
+
+        if is_region and not self.ids_enabled:
+            return False
+
+        if self.project is not None:
+            return bool(self.project.isLabelVisible(annotation.class_name))
+
+        return True
 
     def updateAnnotationScale(self, force=False):
         """
@@ -742,7 +764,7 @@ class QtImageViewerPlus(QtImageViewer):
                     item.setTransformOriginPoint(QPointF(annpoint.coordx, annpoint.coordy))
                     item.setScale(scale)
             if annpoint.id_item is not None:
-                annpoint.id_item.setVisible(legible)
+                annpoint.id_item.setVisible(self.labelVisibility(annpoint, False))
 
         # the labels are a fixed size, so only their visibility can change with the
         # zoom, and only when the threshold is crossed
@@ -750,7 +772,7 @@ class QtImageViewerPlus(QtImageViewer):
             self._labels_were_legible = legible
             for blob in self.image.annotations.seg_blobs:
                 if blob.id_item is not None:
-                    blob.id_item.setVisible(self.ids_enabled and legible)
+                    blob.id_item.setVisible(self.labelVisibility(blob, True))
 
     def updateViewer(self):
         super(QtImageViewerPlus, self).updateViewer()
@@ -764,12 +786,12 @@ class QtImageViewerPlus(QtImageViewer):
 
         # still subject to the zoom: turning ids on while zoomed out should not strew
         # the map with them
+        self.ids_enabled = True
         legible = self.labelsAreLegible()
         for blob in self.annotations.seg_blobs:
             if blob.id_item is not None:
-                blob.id_item.setVisible(legible)
+                blob.id_item.setVisible(self.labelVisibility(blob, True))
 
-        self.ids_enabled = True
         self._labels_were_legible = legible
 
     def disableIds(self):
@@ -990,7 +1012,7 @@ class QtImageViewerPlus(QtImageViewer):
             blob.id_item.setOpacity(0.7)
         self.scene.addItem(blob.id_item)
         self.prepareLabel(blob.id_item)
-        blob.id_item.setVisible(self.ids_enabled and self.labelsAreLegible())
+        blob.id_item.setVisible(self.labelVisibility(blob, True))
 
     def undrawBlob(self, blob, redraw=True):
 
@@ -1593,7 +1615,7 @@ class QtImageViewerPlus(QtImageViewer):
             if blob.qpath_gitem is not None:
                 blob.qpath_gitem.setVisible(visibility)
             if blob.id_item is not None:
-                blob.id_item.setVisible(visibility)
+                blob.id_item.setVisible(visibility and self.labelVisibility(blob, True))
 
         #do the same for annotated points
 
@@ -1603,7 +1625,7 @@ class QtImageViewerPlus(QtImageViewer):
                 blob.cross2_gitem.setVisible(visibility)
                 blob.ellipse_gitem.setVisible(visibility)
             if blob.id_item is not None:
-                blob.id_item.setVisible(visibility)
+                blob.id_item.setVisible(visibility and self.labelVisibility(blob, False))
 
     def updateVisibility(self):
 
