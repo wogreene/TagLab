@@ -19,6 +19,7 @@ application.
 """
 
 import math
+import os
 import textwrap
 from datetime import datetime
 
@@ -890,6 +891,16 @@ def writeReport(filename, project, image, sections=None, cell_size_m=DEFAULT_CEL
         info["Title"] = "TagLab statistics - %s" % image.name
         info["Creator"] = "TagLab"
         info["CreationDate"] = datetime.now()
+
+    # A pdf with no pages in it is not a pdf a reader will open - it comes out as a few
+    # hundred bytes with no page tree. That happens when every section asked for turns
+    # out to have nothing to report, so take the file away again rather than leave
+    # something broken behind with a cheerful message about it.
+    if not written:
+        try:
+            os.remove(filename)
+        except OSError:
+            pass
 
     step("Done.", 1.0)
 

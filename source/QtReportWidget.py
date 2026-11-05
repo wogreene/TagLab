@@ -266,6 +266,15 @@ class QtReportWidget(QWidget):
         self.progress.setVisible(False)
         self.btn_export.setEnabled(True)
 
+        if not written:
+            QMessageBox.information(
+                self, "Export statistics report",
+                "There was nothing to report on this map, so no file was written.\n\n"
+                "Every section asked for came back empty. If rugosity was one of them, "
+                "a grid cell larger than the surveyed area leaves no cell complete "
+                "enough to measure - try a smaller one.")
+            return
+
         skipped = [s for s in sections if s not in written]
         message = "Wrote %d page%s to\n%s" % (len(written),
                                               "" if len(written) == 1 else "s", filename)
