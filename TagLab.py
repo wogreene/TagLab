@@ -69,6 +69,7 @@ from source.QtSettingsWidget import QtSettingsWidget
 from source.QtMapSettingsWidget import QtMapSettingsWidget
 from source.QtScaleWidget import QtScaleWidget
 from source.QtWorkingAreaWidget import QtWorkingAreaWidget
+from source.QtReportWidget import QtReportWidget
 from source.QtCropWidget import QtCropWidget
 from source.QtLayersWidget import QtLayersWidget
 
@@ -214,6 +215,7 @@ class TagLab(QMainWindow):
         self.scale_widget = None
         self.dictionary_widget = None
         self.working_area_widget = None
+        self.report_widget = None
         self.dataset_train_info = None
         self.region_attributes_widget = None
         self.crop_widget = None
@@ -1168,6 +1170,11 @@ class TagLab(QMainWindow):
 
         ### EXPORT
 
+        exportStatsReportAct = QAction("Export Statistics Report (PDF)", self)
+        exportStatsReportAct.setStatusTip("Summarise the map, its DEM, rugosity, points "
+                                          "and regions as a PDF")
+        exportStatsReportAct.triggered.connect(self.exportStatisticsReport)
+
         exportDataTableAct = QAction("Export Annotations As Data Table", self)
         #exportDataTableAct.setShortcut('Ctrl+??')
         exportDataTableAct.setStatusTip("Export annotations as CSV table")
@@ -1284,6 +1291,7 @@ class TagLab(QMainWindow):
         self.submenuImport.addAction(appendAct)
         self.filemenu.addSeparator()
         self.submenuExport = self.filemenu.addMenu("Export")
+        self.submenuExport.addAction(exportStatsReportAct)
         self.submenuExport.addAction(exportDataTableAct)
         self.submenuExport.addAction(exportMapAct)
         self.submenuExport.addAction(exportShapefilesAct)
@@ -5324,6 +5332,32 @@ class TagLab(QMainWindow):
         self.layers_widget.setImage(self.activeviewer.image)
         self.shapefile_filename = ""
 
+
+    @pyqtSlot()
+    def exportStatisticsReport(self):
+        """
+        Summarise the current map as a PDF: the ortho and DEM it is built from, the
+        rugosity of its surface, and the points and regions annotated on it.
+        """
+
+        if self.activeviewer is None or self.activeviewer.image is None:
+            box = QMessageBox()
+            box.setText("A map is needed to report on. Load a map or a project.")
+            box.exec()
+            return
+
+        if self.report_widget is None:
+            self.report_widget = QtReportWidget(self.project, self.activeviewer.image,
+                                                self.taglab_dir, parent=self)
+            self.report_widget.setWindowFlags(Qt.Window)
+            self.report_widget.setWindowModality(Qt.WindowModal)
+            self.report_widget.closed.connect(self.deleteReportWidget)
+            self.report_widget.show()
+
+    @pyqtSlot()
+    def deleteReportWidget(self):
+        if self.report_widget is not None:
+            self.report_widget = None
 
     @pyqtSlot()
     def exportAnnAsDataTable(self):
