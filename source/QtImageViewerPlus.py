@@ -59,10 +59,19 @@ from skimage.morphology import binary_erosion
 
 
 class TextItem(QGraphicsSimpleTextItem):
-    def __init__(self, text, font):
+    """
+    A label centred on its own position, optionally nudged off it.
+
+    The offset is in the item's own coordinates. For a label that ignores the view
+    transform those are screen pixels, so the gap between a point and its id stays the
+    same however far the map is zoomed.
+    """
+
+    def __init__(self, text, font, offset=None):
         QGraphicsSimpleTextItem.__init__(self)
         self.setText(text)
         self.setFont(font)
+        self.offset = offset if offset is not None else QPointF(0.0, 0.0)
 
     def paint(self, painter, option, widget):
         painter.translate(self.boundingRect().topLeft())
@@ -71,7 +80,9 @@ class TextItem(QGraphicsSimpleTextItem):
 
     def boundingRect(self):
         b = super().boundingRect()
-        return QRectF(b.x()-b.width()/2.0, b.y()-b.height()/2.0, b.width(), b.height())
+        return QRectF(b.x() - b.width() / 2.0 + self.offset.x(),
+                      b.y() - b.height() / 2.0 + self.offset.y(),
+                      b.width(), b.height())
 
 
 class NoteWidget(QPlainTextEdit):
@@ -115,13 +126,23 @@ class QtImageViewerPlus(QtImageViewer):
     # inspect a colony the same mark is half the window. The mark follows the zoom
     # between these bounds and stops at them, so it is always findable and never in the
     # way.
-    POINT_MIN_ON_SCREEN = 7.0
-    POINT_MAX_ON_SCREEN = 30.0
+    POINT_MIN_ON_SCREEN = 6.0
+    POINT_MAX_ON_SCREEN = 16.0
 
-    # Labels are text, so below a certain height on screen they are not small - they are
-    # illegible, and a map strewn with unreadable marks is worse than one without them.
-    LABEL_HIDE_BELOW = 9.0
-    LABEL_MAX_ON_SCREEN = 22.0
+    # Labels are set in screen pixels and stay there. Text that grows with the zoom is
+    # the thing being fixed, and a cap alone does not fix it - below the cap it still
+    # grows, which is most of the range anyone works in. An id is a piece of interface,
+    # like a scale bar, so it is drawn at a size chosen for reading rather than for the
+    # map, and the view transform is not applied to it at all.
+    LABEL_POINT_SIZE = 9
+
+    # Labels appear once the point marks would be at least this many pixels across.
+    # Expressed against the marks rather than against the zoom so that it means the
+    # same thing on a 0.5 mm map as on a 2 mm one.
+    LABEL_SHOW_AT_MARK = 12.0
+
+    # how far an id sits from its point, in screen pixels
+    LABEL_OFFSET = 13.0
 
     # the scene size the point mark is built at
     POINT_SCENE_DIAMETER = 20.0
@@ -189,8 +210,10 @@ class QtImageViewerPlus(QtImageViewer):
         # when the ids were first toggled
         self.ids_enabled = True
 
-        # the zoom the point marks and labels were last sized for
+        # the zoom the point marks were last sized for, and whether the ids were being
+        # drawn at it
         self._scaled_at_zoom = None
+        self._labels_were_legible = None
 
         self.show_grid = False
 
@@ -659,7 +682,7 @@ class QtImageViewerPlus(QtImageViewer):
         return wanted / on_screen, wanted
 
     def scalePointMark(self, annpoint):
-        """Size one point's mark and its label for the current zoom."""
+        """Size one point's mark for the current zoom."""
 
         scale, on_screen = self.clampedScale(self.POINT_SCENE_DIAMETER,
                                              self.POINT_MIN_ON_SCREEN,
@@ -670,35 +693,33 @@ class QtImageViewerPlus(QtImageViewer):
                 item.setTransformOriginPoint(QPointF(annpoint.coordx, annpoint.coordy))
                 item.setScale(scale)
 
-        if annpoint.id_item is None:
-            return
+        if annpoint.id_item is not None:
+            annpoint.id_item.setVisible(self.labelsAreLegible())
 
-        self.scaleLabel(annpoint.id_item)
-        # the label sits beside the mark rather than at a fixed distance from it, so it
-        # does not drift away from the point as the mark stops growing
-        offset = 0.75 * self.POINT_SCENE_DIAMETER * scale
-        annpoint.id_item.setPos(annpoint.coordx + offset, annpoint.coordy + offset)
-
-    def scaleLabel(self, item, visible=True):
+    def prepareLabel(self, item, offset=0.0):
         """
-        Size an id label for the current zoom, and hide it when it would be too small
-        to read. visible carries whatever the caller has already decided about it.
+        Set a label up to be drawn in screen pixels rather than in map pixels.
+
+        ItemIgnoresTransformations keeps the item's position in the scene while leaving
+        its shape untouched by the view, which is what makes an id behave like the
+        scale bar instead of like the map.
         """
 
-        natural = item.boundingRect().height()
-        scale, on_screen = self.clampedScale(natural, 0.0, self.LABEL_MAX_ON_SCREEN)
-        item.setTransformOriginPoint(QPointF(0.0, 0.0))
-        item.setScale(scale)
-        item.setVisible(visible and on_screen >= self.LABEL_HIDE_BELOW)
+        item.setFlag(QGraphicsItem.ItemIgnoresTransformations)
+        item.offset = QPointF(offset, offset)
+
+    def labelsAreLegible(self):
+        """Whether the view is close enough in for ids to be worth drawing."""
+
+        return self.POINT_SCENE_DIAMETER * self.zoom_factor >= self.LABEL_SHOW_AT_MARK
 
     def updateAnnotationScale(self, force=False):
         """
-        Resize the point marks and id labels after the view has zoomed.
+        Resize the point marks after the view has zoomed, and show or hide the ids.
 
-        Panning reaches here too, through the view synchronisation, and the marks do
-        not change size when the view only moves. Remembering the zoom this last ran
-        at keeps a pan free of work that would otherwise cost a pass over every point
-        on the map.
+        Panning reaches here too, through the view synchronisation, and nothing changes
+        when the view only moves. Remembering the zoom this last ran at keeps a pan
+        free of work that would otherwise cost a pass over every point on the map.
         """
 
         if self.image is None:
@@ -708,14 +729,28 @@ class QtImageViewerPlus(QtImageViewer):
             return
 
         self._scaled_at_zoom = self.zoom_factor
+        legible = self.labelsAreLegible()
+
+        scale, _ = self.clampedScale(self.POINT_SCENE_DIAMETER,
+                                     self.POINT_MIN_ON_SCREEN,
+                                     self.POINT_MAX_ON_SCREEN)
 
         for annpoint in self.image.annotations.annpoints:
-            if annpoint.ellipse_gitem is not None:
-                self.scalePointMark(annpoint)
+            for item in (annpoint.ellipse_gitem, annpoint.cross1_gitem,
+                         annpoint.cross2_gitem):
+                if item is not None:
+                    item.setTransformOriginPoint(QPointF(annpoint.coordx, annpoint.coordy))
+                    item.setScale(scale)
+            if annpoint.id_item is not None:
+                annpoint.id_item.setVisible(legible)
 
-        for blob in self.image.annotations.seg_blobs:
-            if blob.id_item is not None:
-                self.scaleLabel(blob.id_item, visible=self.ids_enabled)
+        # the labels are a fixed size, so only their visibility can change with the
+        # zoom, and only when the threshold is crossed
+        if legible != self._labels_were_legible:
+            self._labels_were_legible = legible
+            for blob in self.image.annotations.seg_blobs:
+                if blob.id_item is not None:
+                    blob.id_item.setVisible(self.ids_enabled and legible)
 
     def updateViewer(self):
         super(QtImageViewerPlus, self).updateViewer()
@@ -727,11 +762,15 @@ class QtImageViewerPlus(QtImageViewer):
 
     def enableIds(self):
 
+        # still subject to the zoom: turning ids on while zoomed out should not strew
+        # the map with them
+        legible = self.labelsAreLegible()
         for blob in self.annotations.seg_blobs:
             if blob.id_item is not None:
-                blob.id_item.setVisible(True)
+                blob.id_item.setVisible(legible)
 
         self.ids_enabled = True
+        self._labels_were_legible = legible
 
     def disableIds(self):
 
@@ -740,6 +779,7 @@ class QtImageViewerPlus(QtImageViewer):
                 blob.id_item.setVisible(False)
 
         self.ids_enabled = False
+        self._labels_were_legible = None
 
     @pyqtSlot(int)
     def toggleIds(self, checked):
@@ -844,9 +884,9 @@ class QtImageViewerPlus(QtImageViewer):
         annpoint.ellipse_gitem.setOpacity(self.transparency_value)
 
 
-        font_size = min(12, round(6.0 / self.image.pixelSize()))
-        annpoint.id_item = TextItem(str(annpoint.id), QFont("Roboto", font_size, QFont.Bold))
-        annpoint.id_item.setPos(annpoint.coordx+ 20, annpoint.coordy+ 20)
+        annpoint.id_item = TextItem(str(annpoint.id),
+                                    QFont("Roboto", self.LABEL_POINT_SIZE, QFont.Bold))
+        annpoint.id_item.setPos(annpoint.coordx, annpoint.coordy)
         annpoint.id_item.setZValue(2)
         annpoint.id_item.setBrush(QBrush(self.label_pen_color))
         #
@@ -856,6 +896,7 @@ class QtImageViewerPlus(QtImageViewer):
             annpoint.id_item.setOpacity(0.7)
 
         self.scene.addItem(annpoint.id_item)
+        self.prepareLabel(annpoint.id_item, self.LABEL_OFFSET)
         self.scalePointMark(annpoint)
 
 
@@ -932,8 +973,8 @@ class QtImageViewerPlus(QtImageViewer):
         blob.qpath_gitem.setZValue(1)
         blob.qpath_gitem.setOpacity(self.transparency_value)
 
-        font_size = min(12, round(8.0 / self.image.pixelSize()))
-        blob.id_item = TextItem(str(blob.id),  QFont("Roboto", font_size, QFont.Bold))
+        blob.id_item = TextItem(str(blob.id),
+                                QFont("Roboto", self.LABEL_POINT_SIZE, QFont.Bold))
         blob.id_item.setPos(blob.centroid[0], blob.centroid[1])
         # TextItem draws itself centred on its own origin, so scaling about (0, 0)
         # grows the label in place. The origin used to be set to the centroid plus a
@@ -948,7 +989,8 @@ class QtImageViewerPlus(QtImageViewer):
         else:
             blob.id_item.setOpacity(0.7)
         self.scene.addItem(blob.id_item)
-        self.scaleLabel(blob.id_item, visible=self.ids_enabled)
+        self.prepareLabel(blob.id_item)
+        blob.id_item.setVisible(self.ids_enabled and self.labelsAreLegible())
 
     def undrawBlob(self, blob, redraw=True):
 
