@@ -53,6 +53,16 @@ MUTED = "#5d7175"
 RULE = "#c9d6d6"
 ACCENT = "#0a6c88"
 
+# Plots sit on a light grey rather than on the page.
+#
+# The bars and markers are drawn in the colours of the label dictionary, and a
+# dictionary is written to be legible over an orthomosaic, not over paper. Of the 62
+# classes in one of ours, fourteen have less contrast against white than 1.5 to 1 and
+# one is pure white, so on a white page they simply were not there. Grey recovers the
+# pale ones; the outline below recovers the rest.
+PANEL_BG = "#e6ebeb"
+GRID = "#ffffff"
+
 
 def wilsonInterval(successes, total, z=1.96):
     """
@@ -467,7 +477,19 @@ def regionStats(image, project, working_area=None, angle=0.0, plot_area_m2=None)
 # ---------------------------------------------------------------- rendering
 
 
-def _style(ax):
+def outlineFor(colour):
+    """
+    A darker edge for a fill, so a shape has an edge whatever colour it is given.
+
+    Pure white is in at least one dictionary in use, and no choice of background makes
+    a white bar visible on its own. A dark fill gets an outline close to itself, which
+    costs nothing because it already stands out.
+    """
+
+    return tuple(c * 0.45 for c in colour[:3])
+
+
+def _style(ax, grid_axis="x"):
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
@@ -475,6 +497,10 @@ def _style(ax):
     ax.tick_params(colors=MUTED, labelsize=8)
     ax.yaxis.label.set_color(MUTED)
     ax.xaxis.label.set_color(MUTED)
+    ax.set_facecolor(PANEL_BG)
+    if grid_axis:
+        ax.grid(axis=grid_axis, color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
 
 
 def _panel(ax, letter, title):
@@ -482,9 +508,11 @@ def _panel(ax, letter, title):
                  fontweight="bold", color=INK, pad=8)
 
 
-def _frame(ax):
+def _frame(ax, shaded=False):
     ax.set_xticks([])
     ax.set_yticks([])
+    if shaded:
+        ax.set_facecolor(PANEL_BG)
     for s in ax.spines.values():
         s.set_color(RULE)
 
@@ -540,6 +568,7 @@ def _barsWithCI(ax, names, fractions, intervals, colours, counts, xlabel):
     hi = [max(0.0, 100.0 * i[1] - 100.0 * f) for f, i in zip(fractions, intervals)]
 
     ax.barh(y, pct, color=colours, height=0.62,
+            edgecolor=[outlineFor(c) for c in colours], linewidth=0.8,
             xerr=[lo, hi], error_kw={"ecolor": INK, "elinewidth": 0.9, "capsize": 3})
     ax.set_yticks(y)
     ax.set_yticklabels(names, fontsize=9, color=INK)
@@ -651,7 +680,7 @@ def rugosityPage(pdf, grid, stats):
     ax.set_xlabel("rugosity", fontsize=8.5)
     ax.set_ylabel("cells", fontsize=8.5)
     ax.legend(fontsize=8, frameon=False)
-    _style(ax)
+    _style(ax, grid_axis="y")
 
     ax = fig.add_axes([0.57, 0.10, 0.38, 0.30])
     _textBlock(ax, [
@@ -727,14 +756,18 @@ def pointsPage(pdf, image, stats, working_area, angle):
         if not pts:
             continue
         dominant = len(pts) > 0.5 * max(1, total)
+        # the background class is thousands of tiny dots and is left unoutlined; an
+        # edge on every one of them would read as a smudge and cost seconds to draw
         ax.scatter([p[0] for p in pts], [p[1] for p in pts],
-                   s=3 if dominant else 16, c=[r["colour"]],
-                   alpha=0.45 if dominant else 0.95, linewidths=0,
+                   s=3 if dominant else 18, c=[r["colour"]],
+                   alpha=0.5 if dominant else 0.95,
+                   edgecolors="none" if dominant else [outlineFor(r["colour"])],
+                   linewidths=0 if dominant else 0.5,
                    label="%s (%d)" % (r["class_name"], len(pts)))
     ax.set_aspect("equal")
     ax.invert_yaxis()
     _drawWorkingArea(ax, working_area, angle)
-    _frame(ax)
+    _frame(ax, shaded=True)
     if rows:
         ax.legend(fontsize=8, frameon=False, loc="upper center",
                   bbox_to_anchor=(0.5, -0.01), ncol=2)
@@ -752,7 +785,8 @@ def regionsPage(pdf, image, stats, plot_area_m2, working_area, angle):
     if rows and plot_area_m2:
         y = np.arange(len(rows))[::-1]
         pct = [100.0 * r["cover"] for r in rows]
-        ax.barh(y, pct, color=[r["colour"] for r in rows], height=0.62)
+        ax.barh(y, pct, color=[r["colour"] for r in rows], height=0.62,
+                edgecolor=[outlineFor(r["colour"]) for r in rows], linewidth=0.8)
         ax.set_yticks(y)
         ax.set_yticklabels([r["class_name"] for r in rows], fontsize=9, color=INK)
         ax.set_xlabel("%% of plot area (%.2f m²)" % plot_area_m2, fontsize=8.5)
@@ -780,7 +814,7 @@ def regionsPage(pdf, image, stats, plot_area_m2, working_area, angle):
         ax.legend(fontsize=8, frameon=False)
         ax.set_xlabel("region area (m²)", fontsize=8.5)
         ax.set_ylabel("regions", fontsize=8.5)
-        _style(ax)
+        _style(ax, grid_axis="y")
     else:
         ax.axis("off")
         ax.text(0.5, 0.5, "no regions in scope", ha="center", color=MUTED,
