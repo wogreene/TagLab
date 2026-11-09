@@ -96,11 +96,12 @@ class generalSettingsWidget(QWidget):
             "as a left click.")
         self.checkbox_alt_negative.setChecked(ALT_CLICK_NEGATIVE_DEFAULT)
 
-        self.checkbox_min_region = QCheckBox("Do not create regions smaller than")
+        self.checkbox_min_region = QCheckBox("Flag new regions whose total area is below")
         self.checkbox_min_region.setToolTip(
-            "Regions made with the segmentation tools (freehand, 4 clicks, RITM, SAM, watershed) that are smaller than "
-            "this area are not created,\nand a short warning is shown on the viewer. The area uses the pixel size of "
-            "the image.")
+            "When a segmentation tool (freehand, 4 clicks, RITM, SAM, watershed) creates regions in one operation, e.g. "
+            "all the fragments of a coral marked at once,\nand their total area is below this value, they are still "
+            "created but they are selected and a short warning is shown on the viewer, so that they can be removed "
+            "quickly.\nThe area uses the pixel size of the image.")
         self.checkbox_min_region.setChecked(MIN_REGION_ENABLED_DEFAULT)
         self.spinbox_min_region = QDoubleSpinBox()
         self.spinbox_min_region.setRange(0.1, 100000.0)

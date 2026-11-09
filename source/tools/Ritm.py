@@ -457,6 +457,7 @@ class Ritm(Tool):
 
         # finalize created blobs
         message = "[TOOL][RITM][BLOB-CREATED]"
+        created = []
 
         # WARNING!! In the editing mode only the biggest blob is considered (e.g. it is not possible to subdivide
         # an existing blob in two blobs)
@@ -469,23 +470,18 @@ class Ritm(Tool):
                 message = "[TOOL][RITM][BLOB-EDITED]"
                 self.blobInfo.emit(new_blob, message)
             else:
-                kept = self.viewerplus.dropSmallRegions(self.current_blobs)
-
                 for blob in self.current_blobs:
 
                     # undraw preview
                     utils.undrawBlob(blob, self.viewerplus.scene, redraw=False)
-
-                    if not any(blob is k for k in kept):
-                        continue
 
                     # add blob
                     self.viewerplus.addBlob(blob, selected=True)
 
                     self.blobInfo.emit(blob, message)
 
-                if kept:
-                    self.viewerplus.project.updateCorrespondences("ADD", self.viewerplus.image, kept, None, "")
+                self.viewerplus.project.updateCorrespondences("ADD", self.viewerplus.image, self.current_blobs, None, "")
+                created = list(self.current_blobs)
 
         self.viewerplus.saveUndo()
         self.viewerplus.resetSelection()
@@ -496,6 +492,9 @@ class Ritm(Tool):
         self.clicker.reset_clicks()
         self.points.reset()
         self.resetWorkArea()
+
+        # all the regions made by this confirmation (the fragments of an object) are judged together
+        self.viewerplus.flagSmallRegions(created)
 
     def resetWorkArea(self):
         """

@@ -613,9 +613,7 @@ class SAMInteractive(Tool):
         """
         # Finalize created blob
         message = "[TOOL][SAMPREDICTOR][BLOB-CREATED]"
-        kept = self.current_blobs
-        if self.blob_to_correct is None:
-            kept = self.viewerplus.dropSmallRegions(self.current_blobs)
+        created = [] if self.blob_to_correct is not None else list(self.current_blobs)
 
         for blob in self.current_blobs:
 
@@ -627,8 +625,6 @@ class SAMInteractive(Tool):
 
             # order is important: first add then setblob class!
             self.undrawBlob(blob)
-            if not any(blob is k for k in kept):
-                continue
             self.viewerplus.addBlob(blob, selected=True)
             self.blobInfo.emit(blob, message)
 
@@ -639,6 +635,9 @@ class SAMInteractive(Tool):
         self.current_blobs = []
         self.prev_blobs = []
         self.blob_to_correct = None
+
+        # all the regions made by this submission (the fragments of an object) are judged together
+        self.viewerplus.flagSmallRegions(created)
 
     def loadNetwork(self):
 

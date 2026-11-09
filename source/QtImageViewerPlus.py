@@ -1353,25 +1353,35 @@ class QtImageViewerPlus(QtImageViewer):
         pixel_size = self.image.pixelSize()
         return blob.area * pixel_size * pixel_size / 100.0
 
-    def dropSmallRegions(self, blobs):
+    def flagSmallRegions(self, blobs):
         """
-        The regions made by the tools must reach the minimum area set in the settings. Returns the regions that do,
-        and warns on the viewer about the ones that do not (they are not added).
+        Called by the tools when they have created the given regions in one operation (the fragments of a coral
+        marked at once make several regions). The regions are always created; if their total area is below the
+        minimum set in the settings they are flagged: selected, so that they can be removed all together, and a short
+        warning is shown. Returns True if they were flagged.
         """
-        if not self.min_region_enabled:
-            return list(blobs)
+        if not self.min_region_enabled or len(blobs) == 0:
+            return False
 
-        kept = [blob for blob in blobs if self.regionAreaCm2(blob) >= self.min_region_cm2]
-        dropped = [blob for blob in blobs if self.regionAreaCm2(blob) < self.min_region_cm2]
+        total = sum(self.regionAreaCm2(blob) for blob in blobs)
+        if total >= self.min_region_cm2:
+            return False
 
-        if len(dropped) == 1:
-            self.showWarning("Region not created: %.1f cm\u00b2 is below the %.1f cm\u00b2 minimum (Settings > General)"
-                             % (self.regionAreaCm2(dropped[0]), self.min_region_cm2))
-        elif len(dropped) > 1:
-            self.showWarning("%d regions not created: smaller than the %.1f cm\u00b2 minimum (Settings > General)"
-                             % (len(dropped), self.min_region_cm2))
+        self.resetSelection()
+        for blob in blobs:
+            self.addToSelectedList(blob, redraw=False)
+        self.scene.invalidate()
 
-        return kept
+        key = "fn+Delete" if platform.system() == "Darwin" else "Del"
+        if len(blobs) == 1:
+            text = "Small region: %.1f cm\u00b2 (min %.1f cm\u00b2). Selected: %s removes it" % (
+                total, self.min_region_cm2, key)
+        else:
+            text = "%d small regions: %.1f cm\u00b2 total (min %.1f cm\u00b2). Selected: %s removes them" % (
+                len(blobs), total, self.min_region_cm2, key)
+        self.showWarning(text, 6000)
+
+        return True
 
     def mousePressEvent(self, event):
         """ Start mouse pan or zoom mode.
