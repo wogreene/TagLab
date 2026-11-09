@@ -142,20 +142,6 @@ class QtTablePred(QWidget):
         self.pred_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.pred_table.setSortingEnabled(False)
         #remove buttons on top and bottom of the scrollbar
-        self.setStyleSheet("""
-QScrollBar::add-line:vertical {
-height: 0px;
-}
-
-QScrollBar::sub-line:vertical {
-height: 0px;
-}
-
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-height: 0px;
-}
-
-""");
 
         self.model = None
         self.data_table = None

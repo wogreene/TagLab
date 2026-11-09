@@ -261,20 +261,6 @@ class QtTableLabel(QWidget):
         self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.data_table.setSortingEnabled(True)
         #remove buttons on top and bottom of the scrollbar
-        self.setStyleSheet("""
-QScrollBar::add-line:vertical {
-height: 0px;
-}
-
-QScrollBar::sub-line:vertical {
-height: 0px;
-}
-
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-height: 0px;
-}
-
-""");
 
 
         self.model = None
@@ -283,6 +269,7 @@ height: 0px;
         self.original_row_order = None  # Store original order for restore functionality
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.data_table)
 
         self.setLayout(layout)

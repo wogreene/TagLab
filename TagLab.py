@@ -67,6 +67,7 @@ except Exception as e:
 import csv
 import source.Mask as Mask
 import source.RasterOps as rasterops
+from source.ScrollBarStyle import ScrollBarStyler
 from source.QtImageViewerPlus import QtImageViewerPlus
 from source.QtMapViewer import QtMapViewer
 from source.QtSettingsWidget import QtSettingsWidget
@@ -578,6 +579,7 @@ class TagLab(QMainWindow):
         self.groupbox_labels.setStyleSheet("border: 2px solid rgb(255,40,40); padding: 0px;")
 
         layout_groupbox = QVBoxLayout()
+        layout_groupbox.setContentsMargins(0, 0, 0, 0)
         layout_groupbox.addWidget(self.labels_widget)
         self.groupbox_labels.setLayout(layout_groupbox)
 
@@ -682,6 +684,9 @@ class TagLab(QMainWindow):
         # Add message widget to the central layout
         self.central_widget = QWidget()
         self.central_widget.setLayout(central_widget_layout)
+        # tighter sides (the tool column and the viewer were framed by wide margins); top and bottom unchanged
+        central_widget_layout.setContentsMargins(2, 12, 3, 12)
+        central_widget_layout.setSpacing(4)
         self.setCentralWidget(self.central_widget)
 
         self.filemenu = None
@@ -6969,6 +6974,10 @@ if __name__ == '__main__':
 
     # Create the QApplication.
     app = QApplication(sys.argv)
+
+    # every scrollbar in the app gets the same look (including those of dialogs created later)
+    scrollbar_styler = ScrollBarStyler(app)
+    app.installEventFilter(scrollbar_styler)
 
     TAGLAB_PATH = os.path.dirname(__file__)
     PATH_ICONS = os.path.join(TAGLAB_PATH, "icons")
