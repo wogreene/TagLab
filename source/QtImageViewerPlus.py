@@ -304,6 +304,10 @@ class QtImageViewerPlus(QtImageViewer):
 
         self.setContextMenuPolicy(Qt.CustomContextMenu)
 
+        # Shift+Alt(Option)+left click as an alternative to Shift+right click for the negative points
+        # (a quick two-finger click on a Mac trackpad is often reported as a left click)
+        self.alt_click_negative = True
+
         self.transparency_value = 0.5
 
         self.refine_grow = 0.0 #maybe should in in tools
@@ -1321,6 +1325,10 @@ class QtImageViewerPlus(QtImageViewer):
 
 ### MOUSE EVENTS
 
+    def setAltClickNegative(self, enabled):
+
+        self.alt_click_negative = bool(enabled)
+
     def mousePressEvent(self, event):
         """ Start mouse pan or zoom mode.
         """
@@ -1329,6 +1337,15 @@ class QtImageViewerPlus(QtImageViewer):
         scenePos = self.mapToScene(event.pos())
 
         mods = event.modifiers()
+
+        if (event.button() == Qt.LeftButton and self.alt_click_negative
+                and self.tools.tool in ("RITM", "SAMINTERACTIVE")
+                and mods & Qt.ShiftModifier and mods & Qt.AltModifier
+                and not (mods & (Qt.ControlModifier | Qt.MetaModifier))):
+            (x, y) = self.clipScenePos(scenePos)
+            self.tools.rightPressed(x, y, Qt.ShiftModifier)
+            QGraphicsView.mousePressEvent(self, event)
+            return
 
         if event.button() == Qt.LeftButton:
             (x, y) = self.clipScenePos(scenePos)

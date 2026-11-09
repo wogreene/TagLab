@@ -19,6 +19,8 @@
 
 import os
 
+import platform
+
 from PyQt5.QtCore import Qt, QSettings, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import QWidget, QColorDialog, QListWidget, QStackedWidget, QComboBox, QSizePolicy, QLineEdit, \
@@ -28,6 +30,7 @@ class generalSettingsWidget(QWidget):
 
     researchFieldChanged = pyqtSignal(str)
     autosaveInfoChanged = pyqtSignal(int)
+    altNegativeClickChanged = pyqtSignal(bool)
 
     def __init__(self, settings, taglab_dir, parent=None):
         super(generalSettingsWidget, self).__init__(parent)
@@ -76,16 +79,38 @@ class generalSettingsWidget(QWidget):
         layout_H3.addWidget(self.edit_default_dict)
         layout_H3.addWidget(self.btn_default_dict)
 
+        alt_key = "Option" if platform.system() == "Darwin" else "Alt"
+        self.checkbox_alt_negative = QCheckBox("Shift+" + alt_key + "+click places a negative point")
+        self.checkbox_alt_negative.setToolTip(
+            "In the positive/negative clicks tools (RITM and SAM interactive), Shift+" + alt_key + "+left click "
+            "works like Shift+right click.\nUseful when a quick two-finger click on a trackpad is registered "
+            "as a left click.")
+        self.checkbox_alt_negative.setChecked(True)
+
         layout = QVBoxLayout()
         layout.addLayout(layout_H1)
         layout.addLayout(layout_H2)
         layout.addLayout(layout_H3)
+        layout.addWidget(self.checkbox_alt_negative)
 
         self.setLayout(layout)
 
         self.combo_research_field.currentTextChanged.connect(self.setResearchField)
         self.checkbox_autosave.stateChanged.connect(self.autosaveChanged)
         self.spinbox_autosave_interval.valueChanged.connect(self.autosaveIntervalChanged)
+        self.checkbox_alt_negative.stateChanged.connect(self.altNegativeChanged)
+
+    @pyqtSlot(int)
+    def altNegativeChanged(self, status):
+
+        enabled = self.checkbox_alt_negative.isChecked()
+        self.settings.setValue("alt-click-negative-points", enabled)
+        self.altNegativeClickChanged.emit(enabled)
+
+    def setAltNegativeClick(self, enabled):
+
+        self.checkbox_alt_negative.setChecked(enabled)
+        self.altNegativeClickChanged.emit(enabled)
 
     @pyqtSlot()
     def chooseDict(self):
@@ -537,6 +562,8 @@ class QtSettingsWidget(QWidget):
 
         self.general_settings.setResearchField(self.research_field)
         self.general_settings.setAutosaveInterval(self.autosave_interval)
+        self.general_settings.setAltNegativeClick(
+            self.settings.value("alt-click-negative-points", defaultValue=True, type=bool))
 
         self.drawing_settings.setBorderColor(self.border_pen_color)
         self.drawing_settings.setBorderWidth(self.border_pen_width)
