@@ -149,6 +149,12 @@ LOG_FILENAME = "TagLab.log"
 logging.basicConfig(level=logging.DEBUG, filemode='w', filename=LOG_FILENAME, format = '%(asctime)s %(levelname)-8s %(message)s')
 logfile = logging.getLogger("tool-logger")
 
+# Look of the main window. The tooltip rule is explicit (colours and border) because with only the text colour set
+# here the tooltips of the panels came out as white text on a light background on Windows.
+WINDOW_STYLE = ("* { background-color: rgb(55,55,55); color: white; } "
+                "QToolTip { color: white; background-color: rgb(80,80,80); border: 1px solid rgb(100,100,100); padding: 2px; }")
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self, parent=None):
@@ -173,7 +179,7 @@ class TagLab(QMainWindow):
 
         ##### CUSTOM STYLE #####
 
-        self.setStyleSheet("background-color: rgb(55,55,55); color: white")
+        self.setStyleSheet(WINDOW_STYLE)
 
         current_version, need_to_update = self.checkNewVersion()
         if need_to_update:
@@ -7066,7 +7072,7 @@ if __name__ == '__main__':
     title = tool.TAGLAB_VERSION
     mw.setWindowTitle(title)
     mw.setCentralWidget(tool)
-    mw.setStyleSheet("background-color: rgb(55,55,55); color: white")
+    mw.setStyleSheet(WINDOW_STYLE)
     mw.showMaximized()
 
     # Show the viewer and run the application.
