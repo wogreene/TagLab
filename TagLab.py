@@ -44,6 +44,10 @@ from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QFileDialog, QCo
 
 from source.QtExportDXF import QtDXFExport  # Import the dxf export dialog
 from source.QtExportSVG import QtSVGExport  # Import the svg export dialog
+from source.QtExportCOCO import QtCOCOExport  # Import the coco export dialog
+from source.QtExportWADM import QtWADMExport  # Import the WADM export dialog
+from source.QtExportVIA2 import QtVIA2Export  # Import the VIA2 export dialog
+from source.QtExportRegionsWidget import QtExportRegionsWidget  # Import the export regions dialog
 
 
 
@@ -69,6 +73,7 @@ from source.QtSettingsWidget import QtSettingsWidget
 from source.QtMapSettingsWidget import QtMapSettingsWidget
 from source.QtScaleWidget import QtScaleWidget
 from source.QtWorkingAreaWidget import QtWorkingAreaWidget
+from source.QtReportWidget import QtReportWidget
 from source.QtCropWidget import QtCropWidget
 from source.QtLayersWidget import QtLayersWidget
 
@@ -99,6 +104,7 @@ from source.QtDictionaryWidget import QtDictionaryWidget
 from source.QtRegionAttributesWidget import QtRegionAttributesWidget
 from source.QtShapefileAttributeWidget import QtAttributeWidget
 from source.QtGeometricInfoWidget import QtGeometricInfoWidget
+from source.QtGeometricClusteringWidget import QtGeometricClusteringWidget
 from source.QtCourseAnalysis import QtCourseAnalysis
 
 from source.QtSelection import QtSelectByPropertiesWidget
@@ -126,6 +132,10 @@ CHECK_FOR_UPDATES = False
 # training modules
 from models.coral_dataset import CoralsDataset
 import models.training as training
+# models.trainYolo11 is imported where it is used rather than here: it pulls in
+# ultralytics, which is not in install.py or the requirements, so importing it at
+# startup stops TagLab opening at all on a machine that has never trained a YOLO
+# model. Training still works wherever ultralytics is present.
 
 
 # LOGGING
@@ -214,6 +224,7 @@ class TagLab(QMainWindow):
         self.scale_widget = None
         self.dictionary_widget = None
         self.working_area_widget = None
+        self.report_widget = None
         self.dataset_train_info = None
         self.region_attributes_widget = None
         self.crop_widget = None
@@ -231,6 +242,11 @@ class TagLab(QMainWindow):
         ##### TOP LAYOUT
 
         ##### LAYOUT EDITING TOOLS (VERTICAL)
+
+        # size the tool icons from the usable screen height so that the column takes about 72% of
+        # it (19 buttons + 4 separators): compact on laptops, at most 35 px on large screens
+        avail_height = QApplication.primaryScreen().availableGeometry().height()
+        self.tool_icon_size = max(18, min(35, int(((avail_height - 28) * 0.72 - 76) / 22.4)))
 
         flatbuttonstyle = """
         QPushButton:checked { background-color: rgb(100,100,100); }
@@ -275,14 +291,15 @@ class TagLab(QMainWindow):
 
         # separator
         pxmapSeparator = QPixmap("icons/separator.png")
+        separator_size = QSize(self.tool_icon_size, int(30 * self.tool_icon_size / 35))
         labelSeparator1 = QLabel()
-        labelSeparator1.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator1.setPixmap(pxmapSeparator.scaled(separator_size))
         labelSeparator2 = QLabel()
-        labelSeparator2.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator2.setPixmap(pxmapSeparator.scaled(separator_size))
         labelSeparator3 = QLabel()
-        labelSeparator3.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator3.setPixmap(pxmapSeparator.scaled(separator_size))
         labelSeparator4 = QLabel()
-        labelSeparator4.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator4.setPixmap(pxmapSeparator.scaled(separator_size))
         """
         separatorLine = QFrame()
         separatorLine.setFrameShape(QFrame.HLine) 
@@ -342,6 +359,7 @@ class TagLab(QMainWindow):
         self.fillAction         = self.newAction("Fill Region",               "F",   self.fillLabel)
         self.createNegative = self.newAction("Create a Background Region using the WA", "N", self.createNegative)
         self.computeGeometricInfo = self.newAction("Compute Geometric Info", None, self.computeGeometricInfo)
+        self.geometricClustering = self.newAction("Geometric Clustering", None, self.geometricClustering)
         self.rowAnalysis = self.newAction("Course Analysis", None, self.rowAnalysis)
 
         # SELECTION ACTIONS
@@ -393,9 +411,9 @@ class TagLab(QMainWindow):
         ###### LAYOUT MAIN VIEW
 
         self.comboboxSourceImage = QComboBox()
-        self.comboboxSourceImage.setMinimumWidth(200)
+        self.comboboxSourceImage.setMinimumWidth(120)
         self.comboboxTargetImage = QComboBox()
-        self.comboboxTargetImage.setMinimumWidth(200)
+        self.comboboxTargetImage.setMinimumWidth(120)
 
         self.comboboxSourceImage.currentIndexChanged.connect(self.sourceImageChanged)
         self.comboboxTargetImage.currentIndexChanged.connect(self.targetImageChanged)
@@ -403,7 +421,7 @@ class TagLab(QMainWindow):
         self.lblSlider = QLabel("Transparency: 0%")
         self.sliderTransparency = QSlider(Qt.Horizontal)
         self.sliderTransparency.setFocusPolicy(Qt.StrongFocus)
-        self.sliderTransparency.setMinimumWidth(200)
+        self.sliderTransparency.setMinimumWidth(100)
         self.sliderTransparency.setStyleSheet(slider_style2)
         self.sliderTransparency.setMinimum(0)
         self.sliderTransparency.setMaximum(100)
@@ -436,16 +454,16 @@ class TagLab(QMainWindow):
         self.checkBoxIds.stateChanged[int].connect(self.saveGuiPreferences)
 
         self.checkBoxGrid = QCheckBox("Grid")
-        self.checkBoxGrid.setMinimumWidth(60)
         self.checkBoxGrid.setFocusPolicy(Qt.NoFocus)
+        self.checkBoxGrid.setMinimumWidth(60)
         self.checkBoxGrid.stateChanged[int].connect(self.viewerplus.toggleGrid)
         self.checkBoxGrid.stateChanged[int].connect(self.viewerplus2.toggleGrid)
         self.checkBoxGrid.stateChanged[int].connect(self.saveGuiPreferences)
 
         self.checkBoxMap = QCheckBox("Map")
         self.checkBoxMap.setChecked(True)
-        self.checkBoxMap.setMinimumWidth(60)
         self.checkBoxMap.setFocusPolicy(Qt.NoFocus)
+        self.checkBoxMap.setMinimumWidth(60)
         self.checkBoxMap.stateChanged[int].connect(self.viewerplus.toggleImage)
         self.checkBoxMap.stateChanged[int].connect(self.viewerplus2.toggleImage)
         self.checkBoxMap.stateChanged[int].connect(self.saveGuiPreferences)
@@ -457,9 +475,9 @@ class TagLab(QMainWindow):
         self.labelZoomInfo = QLabel("100%")
         self.labelMouseLeftInfo = QLabel("0")
         self.labelMouseTopInfo = QLabel("0")
-        self.labelZoomInfo.setMinimumWidth(70)
-        self.labelMouseLeftInfo.setMinimumWidth(70)
-        self.labelMouseTopInfo.setMinimumWidth(70)
+        self.labelZoomInfo.setMinimumWidth(50)
+        self.labelMouseLeftInfo.setMinimumWidth(50)
+        self.labelMouseTopInfo.setMinimumWidth(50)
 
 
         layout_header = QHBoxLayout()
@@ -614,32 +632,35 @@ class TagLab(QMainWindow):
             panels_size = 900
         if panels_size < 500:
             panels_size = 500
+        # on small screens do not let the panels take more than 30% of the width
+        panels_size = min(panels_size, int(screen_size.width() * 0.30))
+        panels_min_size = min(panels_size, 300)
 
         self.layersdock = QDockWidget("Layers", self)
         self.layersdock.setWidget(self.layers_widget)
-        self.layers_widget.setMinimumWidth(panels_size)
+        self.layers_widget.setMinimumWidth(panels_min_size)
         self.layers_widget.setStyleSheet("padding: 0px")
         self.layersdock.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
 
         self.labelsdock = QDockWidget("Labels", self)
-        self.groupbox_labels.setMinimumWidth(panels_size)
+        self.groupbox_labels.setMinimumWidth(panels_min_size)
         self.labelsdock.setWidget(self.groupbox_labels)
         self.groupbox_labels.setStyleSheet("padding: 0px")
 
         self.datadock = QDockWidget("Data Table", self)
-        self.groupbox_comparison.setMinimumWidth(panels_size)
+        self.groupbox_comparison.setMinimumWidth(panels_min_size)
         self.datadock.setWidget(self.groupbox_comparison)
         self.groupbox_comparison.setStyleSheet("padding: 0px")
 
         self.blobdock = QDockWidget("Info and Attributes", self)
         # self.groupbox_blobpanel.setMinimumWidth(panels_size)
-        self.scroll_area.setMinimumWidth(panels_size)
+        self.scroll_area.setMinimumWidth(panels_min_size)
         # self.blobdock.setWidget(self.groupbox_blobpanel)
         self.blobdock.setWidget(self.scroll_area)
 
         self.mapdock = QDockWidget("Map Preview", self)
         self.mapviewer.preferred = panels_size
-        self.mapviewer.setMinimumWidth(panels_size)
+        self.mapviewer.setMinimumWidth(panels_min_size)
         self.mapdock.setWidget(self.mapviewer)
         self.mapdock.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.MinimumExpanding)
 
@@ -648,6 +669,7 @@ class TagLab(QMainWindow):
             self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
         self.setDockOptions(self.AnimatedDocks)
+        self.panels_size = panels_size
 
         self.compare_panel.setMinimumHeight(200)
 
@@ -821,6 +843,18 @@ class TagLab(QMainWindow):
         settings.setValue("gui-checkbox-grid", self.checkBoxGrid.isChecked())
         settings.setValue("gui-checkbox-image", self.checkBoxMap.isChecked())
 
+    def getGitBranch(self):
+        """Return the current git branch name, or 'main' if it cannot be determined."""
+        try:
+            git_head = os.path.join(os.path.dirname(__file__), '.git', 'HEAD')
+            with open(git_head, 'r') as f:
+                content = f.read().strip()
+            if content.startswith('ref: refs/heads/'):
+                return content.split('refs/heads/')[-1]
+        except Exception:
+            pass
+        return 'main'
+
     def checkNewVersion(self):
 
         github_repo = 'cnr-isti-vclab/TagLab/'
@@ -880,21 +914,26 @@ class TagLab(QMainWindow):
         return action
 
 
+    def applyInitialDockWidths(self):
+        # resizeDocks only takes effect once the window is shown; called once at startup
+        docks = [self.labelsdock, self.layersdock, self.datadock, self.blobdock, self.mapdock]
+        room = self.width() - self.centralWidget().minimumSizeHint().width() - 10
+        width = max(min(self.panels_size, room), 300)
+        self.resizeDocks(docks, [width] * len(docks), Qt.Horizontal)
+
     def newButton(self, icon, tooltip, style, callback):
-        #ICON_SIZE = 48
-        ICON_SIZE = 35
-        BUTTON_SIZE = 35
+        ICON_SIZE = self.tool_icon_size
+        BUTTON_SIZE = self.tool_icon_size
 
         button = QPushButton()
         button.setEnabled(True)
         button.setCheckable(True)
         button.setFlat(True)
-        button.setStyleSheet(style)
-        button.setMinimumWidth(ICON_SIZE)
-        button.setMinimumHeight(ICON_SIZE)
+        # no padding of the platform style around the icon: just a thin border for the hover outline
+        button.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid transparent; }" + style)
         button.setIcon(QIcon(os.path.join(os.path.join(self.taglab_dir, "icons"), icon)))
         button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
-        button.setMaximumWidth(BUTTON_SIZE)
+        button.setFixedSize(BUTTON_SIZE + 4, BUTTON_SIZE + 4)
         button.setToolTip(tooltip)
         button.clicked.connect(callback)
         return button
@@ -1168,6 +1207,11 @@ class TagLab(QMainWindow):
 
         ### EXPORT
 
+        exportStatsReportAct = QAction("Export Statistics Report (PDF)", self)
+        exportStatsReportAct.setStatusTip("Summarise the map, its DEM, rugosity, points "
+                                          "and regions as a PDF")
+        exportStatsReportAct.triggered.connect(self.exportStatisticsReport)
+
         exportDataTableAct = QAction("Export Annotations As Data Table", self)
         #exportDataTableAct.setShortcut('Ctrl+??')
         exportDataTableAct.setStatusTip("Export annotations as CSV table")
@@ -1195,6 +1239,22 @@ class TagLab(QMainWindow):
         exportSVGfilesAct = QAction("Export Regions As SVG", self)
         exportSVGfilesAct.setStatusTip("Export visible regions as SVG")
         exportSVGfilesAct.triggered.connect(self.exportAnnAsSVG)
+
+        exportCOCOAct = QAction("Export Regions As COCO", self)
+        exportCOCOAct.setStatusTip("Export regions as COCO format annotations")
+        exportCOCOAct.triggered.connect(self.exportAnnAsCOCO)
+
+        exportWADMAct = QAction("Export Regions As WADM", self)
+        exportWADMAct.setStatusTip("Export regions as W3C Web Annotation Data Model (WADM) JSON-LD")
+        exportWADMAct.triggered.connect(self.exportAnnAsWADM)
+
+        exportVIA2Act = QAction("Export Regions As VIA2", self)
+        exportVIA2Act.setStatusTip("Export regions as VGG Image Annotator v2 (VIA2) JSON format")
+        exportVIA2Act.triggered.connect(self.exportAnnAsVIA2)
+
+        exportRegionImagesAct = QAction("Export Regions As cropped Images", self)
+        exportRegionImagesAct.setStatusTip("Export each selected region as an individual cropped PNG image")
+        exportRegionImagesAct.triggered.connect(self.exportSelectedRegionsAsImages)
 
         exportGeoRefLabelMapAct = QAction("Export Regions As A GeoTiff", self)
         exportGeoRefLabelMapAct.setStatusTip("Create a label image and export it as a GeoTiff")
@@ -1284,11 +1344,16 @@ class TagLab(QMainWindow):
         self.submenuImport.addAction(appendAct)
         self.filemenu.addSeparator()
         self.submenuExport = self.filemenu.addMenu("Export")
+        self.submenuExport.addAction(exportStatsReportAct)
         self.submenuExport.addAction(exportDataTableAct)
         self.submenuExport.addAction(exportMapAct)
+        self.submenuExport.addAction(exportRegionImagesAct)        
         self.submenuExport.addAction(exportShapefilesAct)
         self.submenuExport.addAction(exportDXFfilesAct)
         self.submenuExport.addAction(exportSVGfilesAct)
+        self.submenuExport.addAction(exportCOCOAct)
+        self.submenuExport.addAction(exportWADMAct)
+        self.submenuExport.addAction(exportVIA2Act)
         self.submenuExport.addAction(exportGeoRefLabelMapAct)
         self.submenuExport.addAction(exportGeoRefImgAct)
         self.submenuExport.addAction(exportForReefArchive)
@@ -1348,6 +1413,7 @@ class TagLab(QMainWindow):
         self.regionmenu.addSeparator()
         self.regionmenu.addAction(self.createNegative)
         self.regionmenu.addAction(self.computeGeometricInfo)
+        self.regionmenu.addAction(self.geometricClustering)
         self.regionmenu.addAction(self.rowAnalysis)
 
         ###### POINT ANNOTATIONS MENU
@@ -1718,15 +1784,25 @@ class TagLab(QMainWindow):
                                         f"Use the Georefering Tool to georeference the current map.")
                 else:
                     # export data
-					#################
+                    #################
 
-					# image is just georeferenced
+                    folderName = QFileDialog.getExistingDirectory(self,
+                                                                  "Choose a folder to export your project for the Reef Archive platform",
+                                                                  "")
+                    if folderName:
+                        # image is just georeferenced
 
-					# working area as shapefile 
+                        # working area as shapefile
+                        output_filename = os.path.join(folderName, "working_area.shp")
+                        wa_poly = rasterops.createPolygonFromWorkingArea(self.project.working_area,
+                                                                             image.georef_filename)
+                        rasterops.write_a_single_polygon_as_shapefile(image, wa_poly, image.georef_filename,
+                                                                          output_filename)
 
-					# annotations as shapefile
-
-                    pass
+                        # annotations as shapefile
+                        output_filename = os.path.join(folderName, "annotations.shp")
+                        rasterops.write_annotations_as_shapefile(self.project, image, image.annotations,
+                                                                         image.georef_filename, output_filename)
 
     @pyqtSlot()
     def exportGenetSVG(self):
@@ -2339,6 +2415,10 @@ class TagLab(QMainWindow):
     def showBlobOnTable(self):
 
         if self.activeviewer is None:
+            return
+        
+        # Check if data panel has data
+        if self.data_panel.data is None:
             return
         
         selected = self.activeviewer.selected_blobs
@@ -3530,6 +3610,26 @@ class TagLab(QMainWindow):
         geometricInfo_widget = QtGeometricInfoWidget(view, parent = self)
         geometricInfo_widget.setWindowModality(Qt.NonModal)
         geometricInfo_widget.show()
+
+    def geometricClustering(self):
+        """
+        Open the Geometric Clustering widget.
+        """
+        view = self.activeviewer
+
+        if view is None:
+            return
+        
+        if len(view.selected_blobs) == 0:
+            msgBox = QMessageBox()
+            msgBox.setWindowTitle(self.TAGLAB_VERSION)
+            msgBox.setText("You need to select at least one region for this operation.")
+            msgBox.exec()
+            return
+
+        geometricClustering_widget = QtGeometricClusteringWidget(view, parent = self)
+        geometricClustering_widget.setWindowModality(Qt.NonModal)
+        geometricClustering_widget.show()
 
     def rowAnalysis(self):
         """
@@ -5326,6 +5426,32 @@ class TagLab(QMainWindow):
 
 
     @pyqtSlot()
+    def exportStatisticsReport(self):
+        """
+        Summarise the current map as a PDF: the ortho and DEM it is built from, the
+        rugosity of its surface, and the points and regions annotated on it.
+        """
+
+        if self.activeviewer is None or self.activeviewer.image is None:
+            box = QMessageBox()
+            box.setText("A map is needed to report on. Load a map or a project.")
+            box.exec()
+            return
+
+        if self.report_widget is None:
+            self.report_widget = QtReportWidget(self.project, self.activeviewer.image,
+                                                self.taglab_dir, parent=self)
+            self.report_widget.setWindowFlags(Qt.Window)
+            self.report_widget.setWindowModality(Qt.WindowModal)
+            self.report_widget.closed.connect(self.deleteReportWidget)
+            self.report_widget.show()
+
+    @pyqtSlot()
+    def deleteReportWidget(self):
+        if self.report_widget is not None:
+            self.report_widget = None
+
+    @pyqtSlot()
     def exportAnnAsDataTable(self):
 
         if self.activeviewer.image is None:
@@ -5560,6 +5686,271 @@ class TagLab(QMainWindow):
         optionsDialog.setWindowModality(Qt.WindowModal)
         optionsDialog.show()
 
+    @pyqtSlot()
+    def exportAnnAsCOCO(self):
+        # Check if activeviewer is set and contains necessary data
+        if self.activeviewer is None:
+            return
+        if self.activeviewer.image is None:
+            return
+        # Show the COCO export dialog
+        optionsDialog = QtCOCOExport(self)
+        optionsDialog.setWindowModality(Qt.WindowModal)
+        optionsDialog.show()
+
+    @pyqtSlot()
+    def exportAnnAsWADM(self):
+        if self.activeviewer is None:
+            return
+        if self.activeviewer.image is None:
+            return
+        optionsDialog = QtWADMExport(self)
+        optionsDialog.setWindowModality(Qt.WindowModal)
+        optionsDialog.show()
+
+    @pyqtSlot()
+    def exportAnnAsVIA2(self):
+        if self.activeviewer is None:
+            return
+        if self.activeviewer.image is None:
+            return
+        optionsDialog = QtVIA2Export(self)
+        optionsDialog.setWindowModality(Qt.WindowModal)
+        optionsDialog.show()
+
+    @pyqtSlot()
+    def exportSelectedRegionsAsImages(self):
+        """
+        Export each selected region as an individual cropped PNG image.
+        A dialog lets the user configure background, transparency, resize, padding,
+        and WhatsApp sticker mode.  Images are named  <mapname>_<regionID>.png.
+        """
+        if self.activeviewer is None or self.activeviewer.image is None:
+            QMessageBox.warning(self, self.TAGLAB_VERSION,
+                                "Load a map before exporting regions.")
+            return
+
+        selected = self.activeviewer.selected_blobs
+        if not selected:
+            QMessageBox.warning(self, self.TAGLAB_VERSION,
+                                "Please select at least one region to export.")
+            return
+
+        dialog = QtExportRegionsWidget(parent=self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        options = dialog.getOptions()
+
+        # Enforce WhatsApp sticker settings in code, not only in the UI.
+        if options.get("whatsapp", False):
+            options["transparent"] = True
+            options["target_size"] = 512
+            options["native_square"] = False
+
+        # Check Pillow once to avoid repeating the same error for each selected region.
+        try:
+            from PIL import Image as _PILImage  # noqa: F401
+        except ImportError:
+            QMessageBox.warning(self, self.TAGLAB_VERSION,
+                                "Pillow is required for region export. Install it with: pip install Pillow")
+            return
+
+        folder = QFileDialog.getExistingDirectory(self, "Choose export folder", self.taglab_dir)
+        if not folder:
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            map_name = os.path.splitext(os.path.basename(self.activeviewer.image.name))[0]
+            img_map = self.activeviewer.img_map
+            img_w   = self.activeviewer.image.width
+            img_h   = self.activeviewer.image.height
+
+            errors = []
+            for blob in selected:
+                try:
+                    self._exportBlobAsImage(blob, img_map, img_w, img_h, folder, map_name, options)
+                except Exception as e:
+                    errors.append(f"Region {blob.id}: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if errors:
+            QMessageBox.warning(self, self.TAGLAB_VERSION,
+                                "Some regions could not be exported:\n" + "\n".join(errors))
+        else:
+            msgBox = QMessageBox(self)
+            msgBox.setWindowTitle(self.TAGLAB_VERSION)
+            msgBox.setText(f"Exported {len(selected)} region(s) to:\n{folder}")
+            msgBox.exec()
+
+    def _exportBlobAsImage(self, blob, img_map, img_w, img_h, folder, map_name, options):
+        """
+        Crop, mask and save a single blob as a PNG.
+
+        bbox format: [top, left, width, height]
+        getMask()  returns ndarray shape (height, width) with values 0/1
+        """
+        import numpy as np
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            raise RuntimeError(
+                "Pillow is required for region export. "
+                "Install it with:  pip install Pillow"
+            )
+
+        padding     = options["padding"]
+        transparent = options["transparent"]
+        bg_color    = options["background"]    # "black" | "white"
+        target_size = options["target_size"]   # None = native, else int (square edge)
+        native_square = options.get("native_square", False)
+        whatsapp    = options["whatsapp"]
+
+        bbox = blob.bbox   # [top, left, width, height]
+
+        # ── Tight crop region around the selected blob ─────────────────────
+        top    = max(0, int(bbox[0]))
+        left   = max(0, int(bbox[1]))
+        bottom = min(img_h, int(bbox[0]) + int(bbox[3]))
+        right  = min(img_w, int(bbox[1]) + int(bbox[2]))
+
+        crop_w = right - left
+        crop_h = bottom - top
+
+        if crop_w <= 0 or crop_h <= 0:
+            raise ValueError("Computed crop area is empty.")
+
+        # ── Crop orthoimage ───────────────────────────────────────────────
+        crop_bbox = [top, left, crop_w, crop_h]
+        img_crop = genutils.cropQImage(img_map, crop_bbox)
+        img_np   = genutils.qimageToNumpyArray(img_crop)   # (H, W, 3) RGB
+
+        # ── Build full-size mask aligned to the padded crop ───────────────
+        blob_mask = blob.getMask()                          # (blob_h, blob_w)  0/1
+
+        mask_full = np.zeros((crop_h, crop_w), dtype=np.uint8)
+
+        # Offset of blob bbox within the tight crop
+        off_top  = int(bbox[0]) - top
+        off_left = int(bbox[1]) - left
+        blob_h   = int(bbox[3])
+        blob_w   = int(bbox[2])
+
+        # Clip ranges for safety
+        dst_r0 = max(0, off_top)
+        dst_c0 = max(0, off_left)
+        dst_r1 = min(crop_h, off_top + blob_h)
+        dst_c1 = min(crop_w, off_left + blob_w)
+
+        src_r0 = dst_r0 - off_top
+        src_c0 = dst_c0 - off_left
+        src_r1 = src_r0 + (dst_r1 - dst_r0)
+        src_c1 = src_c0 + (dst_c1 - dst_c0)
+
+        if dst_r1 > dst_r0 and dst_c1 > dst_c0:
+            mask_full[dst_r0:dst_r1, dst_c0:dst_c1] = \
+                blob_mask[src_r0:src_r1, src_c0:src_c1]
+
+        # ── Compose RGBA image ────────────────────────────────────────────
+        rgba = np.empty((crop_h, crop_w, 4), dtype=np.uint8)
+        rgba[:, :, :3] = img_np
+
+        outside = mask_full == 0
+
+        # Always fill background pixels with the chosen background colour
+        bg_rgb = (0, 0, 0) if bg_color == "black" else (255, 255, 255)
+        rgba[outside, 0] = bg_rgb[0]
+        rgba[outside, 1] = bg_rgb[1]
+        rgba[outside, 2] = bg_rgb[2]
+
+        if transparent or whatsapp:
+            rgba[:, :, 3] = (mask_full * 255).astype(np.uint8)
+        else:
+            rgba[:, :, 3] = 255
+
+        pil_img = PILImage.fromarray(rgba, "RGBA")
+
+        # ── Resize and final padding ──────────────────────────────────────
+        final_size = 512 if whatsapp else target_size
+
+        if final_size is None:
+            # Native modes keep native resolution; optional squared mode uses a square canvas.
+            if native_square:
+                side = max(pil_img.width, pil_img.height) + 2 * padding
+                out_w = side
+                out_h = side
+                x_off = padding + (max(pil_img.width, pil_img.height) - pil_img.width) // 2
+                y_off = padding + (max(pil_img.width, pil_img.height) - pil_img.height) // 2
+            else:
+                out_w = pil_img.width + 2 * padding
+                out_h = pil_img.height + 2 * padding
+                x_off = padding
+                y_off = padding
+
+            if transparent or whatsapp:
+                canvas_bg = (bg_rgb[0], bg_rgb[1], bg_rgb[2], 0)
+            else:
+                canvas_bg = (bg_rgb[0], bg_rgb[1], bg_rgb[2], 255)
+            canvas = PILImage.new("RGBA", (out_w, out_h), canvas_bg)
+            canvas.paste(pil_img, (x_off, y_off), pil_img)
+            pil_img = canvas
+        else:
+            # Square modes: make sure requested padding is in final output pixels.
+            available = final_size - 2 * padding
+            if available <= 0:
+                raise ValueError(
+                    f"Padding {padding}px is too large for {final_size}x{final_size} output."
+                )
+
+            pil_img.thumbnail((available, available), PILImage.LANCZOS)
+
+            if transparent or whatsapp:
+                canvas_bg = (bg_rgb[0], bg_rgb[1], bg_rgb[2], 0)
+            else:
+                canvas_bg = (bg_rgb[0], bg_rgb[1], bg_rgb[2], 255)
+
+            canvas = PILImage.new("RGBA", (final_size, final_size), canvas_bg)
+            x_off = padding + (available - pil_img.width) // 2
+            y_off = padding + (available - pil_img.height) // 2
+            canvas.paste(pil_img, (x_off, y_off), pil_img)
+            pil_img = canvas
+
+        # ── Save ──────────────────────────────────────────────────────────
+        filename = os.path.join(folder, f"{map_name}_{blob.id}.png")
+        if whatsapp:
+            # WhatsApp sticker limit: 500 KB maximum file size.
+            size_limit = 500 * 1024
+            pil_img.save(filename, "PNG", optimize=True, compress_level=9)
+            size_bytes = os.path.getsize(filename)
+
+            if size_bytes > size_limit:
+                compressed = False
+                # Try progressive color quantization to reduce PNG size while
+                # keeping 512x512 dimensions and transparency support.
+                for colors in (256, 128, 64, 32, 16):
+                    try:
+                        quantized = pil_img.quantize(colors=colors)
+                    except Exception:
+                        try:
+                            quantized = pil_img.convert("P", palette=PILImage.ADAPTIVE, colors=colors)
+                        except Exception:
+                            continue
+
+                    quantized.save(filename, "PNG", optimize=True, compress_level=9)
+                    size_bytes = os.path.getsize(filename)
+                    if size_bytes <= size_limit:
+                        compressed = True
+                        break
+
+                if not compressed:
+                    raise ValueError(
+                        f"WhatsApp sticker exceeds 500 KB ({size_bytes / 1024:.1f} KB) "
+                        "even after automatic compression. Try lower padding or simplify the region."
+                    )
+        else:
+            pil_img.save(filename, "PNG")
 
     @pyqtSlot()
     def exportGeoRefLabelMap(self):
@@ -5874,6 +6265,40 @@ class TagLab(QMainWindow):
         self.trainResultsWidget.show()
 
     @pyqtSlot()
+    def trainYoloNetwork(self):
+
+        params = (
+            self.trainYourNetworkWidget
+            .getYoloTrainingParams()
+        )
+        self.setupProgressBar()
+        self.progress_bar.hidePerc()
+        self.progress_bar.setMessage( "Training YOLO-v11")
+
+        QApplication.processEvents()
+
+        try:
+            import models.trainYolo11 as trainYolo
+        except ImportError as e:
+            self.deleteProgressBar()
+            box = QMessageBox()
+            box.setWindowTitle(self.TAGLAB_VERSION)
+            box.setText("Training a YOLO network needs the ultralytics package, which "
+                        "is not installed.\n\nInstall it with:  pip install ultralytics"
+                        "\n\n(%s)" % str(e))
+            box.exec()
+            return
+
+        try:
+            trainYolo.trainYOLOSeg(params,log_callback = self.trainYourNetworkWidget.appendYoloLog)
+
+        finally:
+
+            self.deleteProgressBar()
+            self.deleteTrainYourNetworkWidget()
+
+
+    @pyqtSlot()
     def confirmTraining(self):
         """
         It saves the classifier created with the Train-Your-Network feature.
@@ -5899,7 +6324,7 @@ class TagLab(QMainWindow):
         self.available_classifiers.append(new_classifier)
         newconfig = dict()
         newconfig["Available Classifiers"] = self.available_classifiers
-        str = json.dumps(newconfig)
+        str = json.dumps(newconfig, indent=2)
         newconfig_filename = os.path.join(self.taglab_dir, "config.json")
         f = open(newconfig_filename, "w")
         f.write(str)
@@ -5915,9 +6340,24 @@ class TagLab(QMainWindow):
         if self.trainYourNetworkWidget is None:
             self.trainYourNetworkWidget = QtTYNWidget(self.project.labels, self.TAGLAB_VERSION, parent=self)
             self.trainYourNetworkWidget.setWindowModality(Qt.WindowModal)
-            self.trainYourNetworkWidget.launchTraining.connect(self.trainNewNetwork)
+            self.trainYourNetworkWidget.launchTraining.connect(self.launchNetworkTraining)
         self.trainYourNetworkWidget.show()
 
+    @pyqtSlot()
+    def launchNetworkTraining(self):
+
+        self.trainYourNetworkWidget.yoloLog.clear()
+
+        # DeepLab
+        if self.trainYourNetworkWidget.modelStack.currentIndex() == 1:
+            self.trainNewNetwork()
+            return
+        # YOLO
+        if self.trainYourNetworkWidget.modelStack.currentIndex() == 2:
+            self.trainYourNetworkWidget.appendYoloLog("Starting YOLO training...\n")
+            self.trainYoloNetwork()
+
+            return
 
     @pyqtSlot()
     def openDatasetManager(self):
@@ -5925,7 +6365,6 @@ class TagLab(QMainWindow):
         if self.datasetManagerWidget is None:
             self.datasetManagerWidget = QtDatasetManagerWidget(self.project.labels, self.TAGLAB_VERSION, parent=self)
             self.datasetManagerWidget.setWindowModality(Qt.WindowModal)
-            # self.trainYourNetworkWidget.launchTraining.connect(self.trainNewNetwork)
         self.datasetManagerWidget.show()
 
     @pyqtSlot()
@@ -6544,11 +6983,26 @@ if __name__ == '__main__':
          color: rgb(100,100,100);\
      }"
 
-    slider_style2 = "QSlider::handle::horizontal\
+    slider_style2 = "\
+     QSlider::groove:horizontal\
+     {\
+         height: 4px;\
+         background: rgb(90,90,90);\
+         border-radius: 2px;\
+     }\
+     QSlider::sub-page:horizontal\
+     {\
+         background: rgb(10,132,255);\
+         border-radius: 2px;\
+     }\
+     QSlider::handle:horizontal\
      {\
          background: white;\
-         border: 1;\
-         width: 18px;\
+         border: 1px solid rgb(150,150,150);\
+         width: 12px;\
+         height: 12px;\
+         margin: -5px 0;\
+         border-radius: 7px;\
      }"
 
     app.setStyleSheet("QLabel {color: white}")
@@ -6596,5 +7050,6 @@ if __name__ == '__main__':
 
     # Show the viewer and run the application.
     mw.show()
+    QTimer.singleShot(0, tool.applyInitialDockWidths)
 
     sys.exit(app.exec_())

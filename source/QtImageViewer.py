@@ -190,7 +190,6 @@ class QtImageViewer(QGraphicsView):
         self.horizontalScrollBar().setValue(int(posx))
         self.verticalScrollBar().setValue(int(posy))
         self.zoom_factor = zoomfactor * self.px_to_mm
-        print(self.objectName(), posx, posy, self.zoom_factor)
         self.updateViewer()
         self.blockSignals(False)
 

@@ -122,7 +122,7 @@ class NewDataset(object):
 		tile_size = self.tile_size
 		crop_size = self.crop_size
 
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			# the area for the tiling is adjusted maximizing the pixels used
 			horz_tiles = 1 + int(w_scaled / tile_size)
 			vert_tiles = 1 + int(h_scaled / tile_size)
@@ -169,7 +169,7 @@ class NewDataset(object):
 		crop_labels = self.labels[y:y + h_exp, x:x + w_exp]
 		self.labels = cv2.resize(crop_labels, dsize=(w, h), interpolation=cv2.INTER_NEAREST)
 
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			crop_ids = self.id_image[y:y + h_exp, x:x + w_exp]
 			self.id_image = cv2.resize(crop_ids, dsize=(w, h), interpolation=cv2.INTER_NEAREST)
 
@@ -632,7 +632,8 @@ class NewDataset(object):
 
 		self.labels = np.full((h, w), background_code, dtype=np.uint8)
 
-		need_ids = self.data_format == "COCO" or self.data_format == "YOLO-v5"
+		need_ids = (self.data_format == "COCO"
+				    or self.data_format == "YOLO-v5 Annotations for YOLO-V11")
 		if need_ids:
 			self.id_image = np.zeros((h, w), dtype=np.int32)
 
@@ -758,7 +759,7 @@ class NewDataset(object):
 		test_area = [0, 0, 0, 0]
 		# the train area is represented by the entire map minus the validation and test areas
 
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			self.setupAreasForYOLO(mode)
 		else:
 			if mode == "UNIFORM (VERTICAL)":
@@ -869,7 +870,7 @@ class NewDataset(object):
 
 		step = self.step
 
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 
 			tile_rows = 1 + (self.adjusted_export_area[3] - self.tile_size) // step
 			tile_cols = 1 + (self.adjusted_export_area[2] - self.tile_size) // step
@@ -893,7 +894,7 @@ class NewDataset(object):
 
 		bbox = [0, 0, 0, 0]
 
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			# the intersection should take into account the entire tile
 			half_size = self.tile_size // 2
 			area_tile = float(self.tile_size * self.tile_size)
@@ -1273,7 +1274,7 @@ class NewDataset(object):
 		The training tiles are the ones of the entire map minus the ones inside the test validation and test area.
 		"""
 
-		if self.data_format == "YOLO-v5":
+		if self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			yolo_cache_filename = os.path.join(basename, "yolo-cache.json")
 			if os.path.exists(yolo_cache_filename):
 				with open(yolo_cache_filename) as f:
@@ -1286,7 +1287,7 @@ class NewDataset(object):
 
 		##### VALIDATION
 
-		if self.data_format == "YOLO-v5":
+		if self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			basenameVim = os.path.join(basename, os.path.join("images", "val"))
 			basenameVlab = os.path.join(basename, os.path.join("labels", "val"))
 		else:
@@ -1308,7 +1309,7 @@ class NewDataset(object):
 
 		##### TEST
 
-		if self.data_format != "YOLO-v5":
+		if self.data_format != "YOLO-v5 Annotations for YOLO-V11":
 
 			basenameTestIm = os.path.join(basename, os.path.join("test", "images"))
 			try:
@@ -1327,7 +1328,7 @@ class NewDataset(object):
 
 		##### TRAIN
 
-		if self.data_format == "YOLO-v5":
+		if self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			basenameTrainIm = os.path.join(basename, os.path.join("images", "train"))
 			basenameTrainLab = os.path.join(basename, os.path.join("labels", "train"))
 		else:
@@ -1346,7 +1347,7 @@ class NewDataset(object):
 
 		self.cropAndSaveTiles(self.training_tiles, tilename, basenameTrainIm, basenameTrainLab)
 
-		if self.data_format == "YOLO-v5":
+		if self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 			# create dataset.YAML
 			dataset_yaml_filename = os.path.join(basename, "dataset.yaml")
 			fy = open(dataset_yaml_filename, 'wt')
@@ -1474,14 +1475,14 @@ class NewDataset(object):
 			filenameLabel = os.path.join(basenamelab, tilename + str.format("_{0:04d}", (i)) + ".png")
 			croplabel.save(filenameLabel)
 
-			if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+			if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 
 				# the region ids are kept as integers throughout; they used to be encoded into
 				# the RGB channels of an image and decoded again here, for no gain
 				regions_map = self.cropArray(self.id_image, top, left, self.tile_size, 0)
 				regions = measure.regionprops(regions_map)
 
-				if self.data_format == "YOLO-v5":
+				if self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 
 					filenameLabel = os.path.join(basenamelab, tilename + str.format("_{0:04d}", (i)) + ".txt")
 					fp = open(filenameLabel, "wt")
@@ -1573,7 +1574,7 @@ class NewDataset(object):
         Save a figure to show the samples in the different areas.
         """
 
-		if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+		if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 
 			offx = self.adjusted_export_area[1]
 			offy = self.adjusted_export_area[0]
@@ -1631,7 +1632,7 @@ class NewDataset(object):
 
 		if show_tiles is True:
 
-			if self.data_format == "COCO" or self.data_format == "YOLO-v5":
+			if self.data_format == "COCO" or self.data_format == "YOLO-v5 Annotations for YOLO-V11":
 				size = self.tile_size
 				half_size = int(size / 2)
 			else:
