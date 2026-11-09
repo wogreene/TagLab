@@ -243,6 +243,11 @@ class TagLab(QMainWindow):
 
         ##### LAYOUT EDITING TOOLS (VERTICAL)
 
+        # size the tool icons from the usable screen height so that the column takes about 72% of
+        # it (19 buttons + 4 separators): compact on laptops, at most 35 px on large screens
+        avail_height = QApplication.primaryScreen().availableGeometry().height()
+        self.tool_icon_size = max(18, min(35, int(((avail_height - 28) * 0.72 - 76) / 22.4)))
+
         flatbuttonstyle = """
         QPushButton:checked { background-color: rgb(100,100,100); }
         QPushButton:hover   { border: 1px solid darkgray;         }
@@ -286,14 +291,15 @@ class TagLab(QMainWindow):
 
         # separator
         pxmapSeparator = QPixmap("icons/separator.png")
+        separator_size = QSize(self.tool_icon_size, int(30 * self.tool_icon_size / 35))
         labelSeparator1 = QLabel()
-        labelSeparator1.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator1.setPixmap(pxmapSeparator.scaled(separator_size))
         labelSeparator2 = QLabel()
-        labelSeparator2.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator2.setPixmap(pxmapSeparator.scaled(separator_size))
         labelSeparator3 = QLabel()
-        labelSeparator3.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator3.setPixmap(pxmapSeparator.scaled(separator_size))
         labelSeparator4 = QLabel()
-        labelSeparator4.setPixmap(pxmapSeparator.scaled(QSize(35, 30)))
+        labelSeparator4.setPixmap(pxmapSeparator.scaled(separator_size))
         """
         separatorLine = QFrame()
         separatorLine.setFrameShape(QFrame.HLine) 
@@ -405,9 +411,9 @@ class TagLab(QMainWindow):
         ###### LAYOUT MAIN VIEW
 
         self.comboboxSourceImage = QComboBox()
-        self.comboboxSourceImage.setMinimumWidth(200)
+        self.comboboxSourceImage.setMinimumWidth(120)
         self.comboboxTargetImage = QComboBox()
-        self.comboboxTargetImage.setMinimumWidth(200)
+        self.comboboxTargetImage.setMinimumWidth(120)
 
         self.comboboxSourceImage.currentIndexChanged.connect(self.sourceImageChanged)
         self.comboboxTargetImage.currentIndexChanged.connect(self.targetImageChanged)
@@ -415,7 +421,7 @@ class TagLab(QMainWindow):
         self.lblSlider = QLabel("Transparency: 0%")
         self.sliderTransparency = QSlider(Qt.Horizontal)
         self.sliderTransparency.setFocusPolicy(Qt.StrongFocus)
-        self.sliderTransparency.setMinimumWidth(200)
+        self.sliderTransparency.setMinimumWidth(100)
         self.sliderTransparency.setStyleSheet(slider_style2)
         self.sliderTransparency.setMinimum(0)
         self.sliderTransparency.setMaximum(100)
@@ -448,16 +454,16 @@ class TagLab(QMainWindow):
         self.checkBoxIds.stateChanged[int].connect(self.saveGuiPreferences)
 
         self.checkBoxGrid = QCheckBox("Grid")
-        self.checkBoxGrid.setMinimumWidth(60)
         self.checkBoxGrid.setFocusPolicy(Qt.NoFocus)
+        self.checkBoxGrid.setMinimumWidth(60)
         self.checkBoxGrid.stateChanged[int].connect(self.viewerplus.toggleGrid)
         self.checkBoxGrid.stateChanged[int].connect(self.viewerplus2.toggleGrid)
         self.checkBoxGrid.stateChanged[int].connect(self.saveGuiPreferences)
 
         self.checkBoxMap = QCheckBox("Map")
         self.checkBoxMap.setChecked(True)
-        self.checkBoxMap.setMinimumWidth(60)
         self.checkBoxMap.setFocusPolicy(Qt.NoFocus)
+        self.checkBoxMap.setMinimumWidth(60)
         self.checkBoxMap.stateChanged[int].connect(self.viewerplus.toggleImage)
         self.checkBoxMap.stateChanged[int].connect(self.viewerplus2.toggleImage)
         self.checkBoxMap.stateChanged[int].connect(self.saveGuiPreferences)
@@ -469,9 +475,9 @@ class TagLab(QMainWindow):
         self.labelZoomInfo = QLabel("100%")
         self.labelMouseLeftInfo = QLabel("0")
         self.labelMouseTopInfo = QLabel("0")
-        self.labelZoomInfo.setMinimumWidth(70)
-        self.labelMouseLeftInfo.setMinimumWidth(70)
-        self.labelMouseTopInfo.setMinimumWidth(70)
+        self.labelZoomInfo.setMinimumWidth(50)
+        self.labelMouseLeftInfo.setMinimumWidth(50)
+        self.labelMouseTopInfo.setMinimumWidth(50)
 
 
         layout_header = QHBoxLayout()
@@ -626,32 +632,35 @@ class TagLab(QMainWindow):
             panels_size = 900
         if panels_size < 500:
             panels_size = 500
+        # on small screens do not let the panels take more than 30% of the width
+        panels_size = min(panels_size, int(screen_size.width() * 0.30))
+        panels_min_size = min(panels_size, 300)
 
         self.layersdock = QDockWidget("Layers", self)
         self.layersdock.setWidget(self.layers_widget)
-        self.layers_widget.setMinimumWidth(panels_size)
+        self.layers_widget.setMinimumWidth(panels_min_size)
         self.layers_widget.setStyleSheet("padding: 0px")
         self.layersdock.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
 
         self.labelsdock = QDockWidget("Labels", self)
-        self.groupbox_labels.setMinimumWidth(panels_size)
+        self.groupbox_labels.setMinimumWidth(panels_min_size)
         self.labelsdock.setWidget(self.groupbox_labels)
         self.groupbox_labels.setStyleSheet("padding: 0px")
 
         self.datadock = QDockWidget("Data Table", self)
-        self.groupbox_comparison.setMinimumWidth(panels_size)
+        self.groupbox_comparison.setMinimumWidth(panels_min_size)
         self.datadock.setWidget(self.groupbox_comparison)
         self.groupbox_comparison.setStyleSheet("padding: 0px")
 
         self.blobdock = QDockWidget("Info and Attributes", self)
         # self.groupbox_blobpanel.setMinimumWidth(panels_size)
-        self.scroll_area.setMinimumWidth(panels_size)
+        self.scroll_area.setMinimumWidth(panels_min_size)
         # self.blobdock.setWidget(self.groupbox_blobpanel)
         self.blobdock.setWidget(self.scroll_area)
 
         self.mapdock = QDockWidget("Map Preview", self)
         self.mapviewer.preferred = panels_size
-        self.mapviewer.setMinimumWidth(panels_size)
+        self.mapviewer.setMinimumWidth(panels_min_size)
         self.mapdock.setWidget(self.mapviewer)
         self.mapdock.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.MinimumExpanding)
 
@@ -660,6 +669,7 @@ class TagLab(QMainWindow):
             self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
         self.setDockOptions(self.AnimatedDocks)
+        self.panels_size = panels_size
 
         self.compare_panel.setMinimumHeight(200)
 
@@ -904,21 +914,26 @@ class TagLab(QMainWindow):
         return action
 
 
+    def applyInitialDockWidths(self):
+        # resizeDocks only takes effect once the window is shown; called once at startup
+        docks = [self.labelsdock, self.layersdock, self.datadock, self.blobdock, self.mapdock]
+        room = self.width() - self.centralWidget().minimumSizeHint().width() - 10
+        width = max(min(self.panels_size, room), 300)
+        self.resizeDocks(docks, [width] * len(docks), Qt.Horizontal)
+
     def newButton(self, icon, tooltip, style, callback):
-        #ICON_SIZE = 48
-        ICON_SIZE = 35
-        BUTTON_SIZE = 35
+        ICON_SIZE = self.tool_icon_size
+        BUTTON_SIZE = self.tool_icon_size
 
         button = QPushButton()
         button.setEnabled(True)
         button.setCheckable(True)
         button.setFlat(True)
-        button.setStyleSheet(style)
-        button.setMinimumWidth(ICON_SIZE)
-        button.setMinimumHeight(ICON_SIZE)
+        # no padding of the platform style around the icon: just a thin border for the hover outline
+        button.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid transparent; }" + style)
         button.setIcon(QIcon(os.path.join(os.path.join(self.taglab_dir, "icons"), icon)))
         button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
-        button.setMaximumWidth(BUTTON_SIZE)
+        button.setFixedSize(BUTTON_SIZE + 4, BUTTON_SIZE + 4)
         button.setToolTip(tooltip)
         button.clicked.connect(callback)
         return button
@@ -6968,11 +6983,26 @@ if __name__ == '__main__':
          color: rgb(100,100,100);\
      }"
 
-    slider_style2 = "QSlider::handle::horizontal\
+    slider_style2 = "\
+     QSlider::groove:horizontal\
+     {\
+         height: 4px;\
+         background: rgb(90,90,90);\
+         border-radius: 2px;\
+     }\
+     QSlider::sub-page:horizontal\
+     {\
+         background: rgb(10,132,255);\
+         border-radius: 2px;\
+     }\
+     QSlider::handle:horizontal\
      {\
          background: white;\
-         border: 1;\
-         width: 18px;\
+         border: 1px solid rgb(150,150,150);\
+         width: 12px;\
+         height: 12px;\
+         margin: -5px 0;\
+         border-radius: 7px;\
      }"
 
     app.setStyleSheet("QLabel {color: white}")
@@ -7020,5 +7050,6 @@ if __name__ == '__main__':
 
     # Show the viewer and run the application.
     mw.show()
+    QTimer.singleShot(0, tool.applyInitialDockWidths)
 
     sys.exit(app.exec_())
