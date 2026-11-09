@@ -24,10 +24,14 @@ import platform
 from PyQt5.QtCore import Qt, QSettings, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import QWidget, QColorDialog, QListWidget, QStackedWidget, QComboBox, QSizePolicy, QLineEdit, \
-    QLabel, QSpinBox, QCheckBox, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog
+    QLabel, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog
 
 # the trackpad problem it works around is a macOS one, so it is on by default there only
 ALT_CLICK_NEGATIVE_DEFAULT = platform.system() == "Darwin"
+
+# regions made with the tools below this area (cm2) are not created
+MIN_REGION_ENABLED_DEFAULT = True
+MIN_REGION_AREA_CM2_DEFAULT = 15.0
 
 
 class generalSettingsWidget(QWidget):
@@ -35,6 +39,7 @@ class generalSettingsWidget(QWidget):
     researchFieldChanged = pyqtSignal(str)
     autosaveInfoChanged = pyqtSignal(int)
     altNegativeClickChanged = pyqtSignal(bool)
+    minRegionAreaChanged = pyqtSignal(bool, float)
 
     def __init__(self, settings, taglab_dir, parent=None):
         super(generalSettingsWidget, self).__init__(parent)
@@ -91,11 +96,31 @@ class generalSettingsWidget(QWidget):
             "as a left click.")
         self.checkbox_alt_negative.setChecked(ALT_CLICK_NEGATIVE_DEFAULT)
 
+        self.checkbox_min_region = QCheckBox("Do not create regions smaller than")
+        self.checkbox_min_region.setToolTip(
+            "Regions made with the segmentation tools (freehand, 4 clicks, RITM, SAM, watershed) that are smaller than "
+            "this area are not created,\nand a short warning is shown on the viewer. The area uses the pixel size of "
+            "the image.")
+        self.checkbox_min_region.setChecked(MIN_REGION_ENABLED_DEFAULT)
+        self.spinbox_min_region = QDoubleSpinBox()
+        self.spinbox_min_region.setRange(0.1, 100000.0)
+        self.spinbox_min_region.setDecimals(1)
+        self.spinbox_min_region.setSingleStep(1.0)
+        self.spinbox_min_region.setSuffix(" cm\u00b2")
+        self.spinbox_min_region.setValue(MIN_REGION_AREA_CM2_DEFAULT)
+        self.spinbox_min_region.setEnabled(MIN_REGION_ENABLED_DEFAULT)
+
+        layout_H4 = QHBoxLayout()
+        layout_H4.addWidget(self.checkbox_min_region)
+        layout_H4.addWidget(self.spinbox_min_region)
+        layout_H4.addStretch()
+
         layout = QVBoxLayout()
         layout.addLayout(layout_H1)
         layout.addLayout(layout_H2)
         layout.addLayout(layout_H3)
         layout.addWidget(self.checkbox_alt_negative)
+        layout.addLayout(layout_H4)
 
         self.setLayout(layout)
 
@@ -103,6 +128,29 @@ class generalSettingsWidget(QWidget):
         self.checkbox_autosave.stateChanged.connect(self.autosaveChanged)
         self.spinbox_autosave_interval.valueChanged.connect(self.autosaveIntervalChanged)
         self.checkbox_alt_negative.stateChanged.connect(self.altNegativeChanged)
+        self.checkbox_min_region.stateChanged.connect(self.minRegionChanged)
+        self.spinbox_min_region.valueChanged.connect(self.minRegionChanged)
+
+    def minRegionChanged(self, _=None):
+
+        enabled = self.checkbox_min_region.isChecked()
+        value = self.spinbox_min_region.value()
+        self.spinbox_min_region.setEnabled(enabled)
+        self.settings.setValue("min-region-area-enabled", enabled)
+        self.settings.setValue("min-region-area-cm2", value)
+        self.minRegionAreaChanged.emit(enabled, value)
+
+    def setMinRegionArea(self, enabled, value):
+
+        # set the widgets without saving: the values were just read from the settings
+        self.checkbox_min_region.blockSignals(True)
+        self.spinbox_min_region.blockSignals(True)
+        self.checkbox_min_region.setChecked(enabled)
+        self.spinbox_min_region.setValue(value)
+        self.checkbox_min_region.blockSignals(False)
+        self.spinbox_min_region.blockSignals(False)
+        self.spinbox_min_region.setEnabled(enabled)
+        self.minRegionAreaChanged.emit(enabled, self.spinbox_min_region.value())
 
     @pyqtSlot(int)
     def altNegativeChanged(self, status):
@@ -568,6 +616,9 @@ class QtSettingsWidget(QWidget):
         self.general_settings.setAutosaveInterval(self.autosave_interval)
         self.general_settings.setAltNegativeClick(
             self.settings.value("alt-click-negative-points", defaultValue=ALT_CLICK_NEGATIVE_DEFAULT, type=bool))
+        self.general_settings.setMinRegionArea(
+            self.settings.value("min-region-area-enabled", defaultValue=MIN_REGION_ENABLED_DEFAULT, type=bool),
+            self.settings.value("min-region-area-cm2", defaultValue=MIN_REGION_AREA_CM2_DEFAULT, type=float))
 
         self.drawing_settings.setBorderColor(self.border_pen_color)
         self.drawing_settings.setBorderWidth(self.border_pen_width)

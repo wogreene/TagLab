@@ -328,6 +328,8 @@ class Watershed(Tool):
             if blob.class_name != "Dummy":
                 try:
                     self.snapBlobBorders(blob)
+                    if not self.viewerplus.dropSmallRegions([blob]):
+                        continue
                     self.viewerplus.addBlob(blob)
                     created_blobs.append(blob)
                 except Exception as e:
@@ -338,6 +340,8 @@ class Watershed(Tool):
                         for seg in segmented:
                             if checkIntersection(blob.bbox, seg.bbox):
                                 self.viewerplus.annotations.subtract(seg, blob)
+                        if not self.viewerplus.dropSmallRegions([blob]):
+                            continue
                         self.viewerplus.addBlob(blob)
                         created_blobs.append(blob)
                     else:

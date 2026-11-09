@@ -41,6 +41,7 @@ import source.Mask as Mask
 
 from source.QtImageViewer import QtImageViewer
 from source.QtToolMessagePanel import QtToolMessagePanel
+from source.QtToastMessage import QtToastMessage
 
 from source.genutils import distance_point_AABB
 from source import genutils
@@ -240,6 +241,11 @@ class QtImageViewerPlus(QtImageViewer):
         # Message panel for tool instructions and status
         self.toolsMessagePanel = QtToolMessagePanel(self)
         self.toolsMessagePanel.hide()
+
+        # short-lived warning over the viewer, and the minimum area for the regions made with the tools
+        self.warningToast = QtToastMessage(self)
+        self.min_region_enabled = True
+        self.min_region_cm2 = 15.0
 
         self.undo_data = Undo()
 
@@ -1329,6 +1335,43 @@ class QtImageViewerPlus(QtImageViewer):
     def setAltClickNegative(self, enabled):
 
         self.alt_click_negative = bool(enabled)
+
+    def setMinRegionArea(self, enabled, area_cm2):
+
+        self.min_region_enabled = bool(enabled)
+        self.min_region_cm2 = float(area_cm2)
+
+    def showWarning(self, text, timeout=4000):
+
+        self.warningToast.showText(text, timeout)
+
+    def regionAreaCm2(self, blob):
+        """
+        Area of the region in cm2: the pixels of the region times the pixel size (mm per pixel) squared, as in the
+        labels panel.
+        """
+        pixel_size = self.image.pixelSize()
+        return blob.area * pixel_size * pixel_size / 100.0
+
+    def dropSmallRegions(self, blobs):
+        """
+        The regions made by the tools must reach the minimum area set in the settings. Returns the regions that do,
+        and warns on the viewer about the ones that do not (they are not added).
+        """
+        if not self.min_region_enabled:
+            return list(blobs)
+
+        kept = [blob for blob in blobs if self.regionAreaCm2(blob) >= self.min_region_cm2]
+        dropped = [blob for blob in blobs if self.regionAreaCm2(blob) < self.min_region_cm2]
+
+        if len(dropped) == 1:
+            self.showWarning("Region not created: %.1f cm\u00b2 is below the %.1f cm\u00b2 minimum (Settings > General)"
+                             % (self.regionAreaCm2(dropped[0]), self.min_region_cm2))
+        elif len(dropped) > 1:
+            self.showWarning("%d regions not created: smaller than the %.1f cm\u00b2 minimum (Settings > General)"
+                             % (len(dropped), self.min_region_cm2))
+
+        return kept
 
     def mousePressEvent(self, event):
         """ Start mouse pan or zoom mode.

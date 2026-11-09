@@ -43,15 +43,18 @@ class Freehand(Tool):
             return
 
         if flagValid is True:
-            blob.setId(self.viewerplus.annotations.getFreeId())
+            if not self.viewerplus.dropSmallRegions([blob]):
+                self.log.emit("[TOOL][FREEHAND] Operation ends (region smaller than the minimum area).")
+            else:
+                blob.setId(self.viewerplus.annotations.getFreeId())
 
-            self.viewerplus.resetSelection()
-            self.viewerplus.addBlob(blob, selected=True)
-            self.viewerplus.project.updateCorrespondences("ADD", self.viewerplus.image, [blob], None, "")
-            self.blobInfo.emit(blob, "[TOOL][FREEHAND][BLOB-CREATED]")
-            self.viewerplus.saveUndo()
+                self.viewerplus.resetSelection()
+                self.viewerplus.addBlob(blob, selected=True)
+                self.viewerplus.project.updateCorrespondences("ADD", self.viewerplus.image, [blob], None, "")
+                self.blobInfo.emit(blob, "[TOOL][FREEHAND][BLOB-CREATED]")
+                self.viewerplus.saveUndo()
 
-            self.log.emit("[TOOL][FREEHAND] Operation ends.")
+                self.log.emit("[TOOL][FREEHAND] Operation ends.")
 
         else:
             self.log.emit("[TOOL][FREEHAND] Operation ends (INVALID SNAP!).")

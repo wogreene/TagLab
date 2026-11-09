@@ -173,6 +173,7 @@ class FourClicks(Tool):
 
             #TODO: move this function to blob!!!
             blobs = self.viewerplus.annotations.blobsFromMask(segm_mask, left_map_pos, top_map_pos, area_extreme_points)
+            blobs = self.viewerplus.dropSmallRegions(blobs)
 
             self.viewerplus.resetSelection()
             for blob in blobs:

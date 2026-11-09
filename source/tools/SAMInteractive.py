@@ -613,6 +613,10 @@ class SAMInteractive(Tool):
         """
         # Finalize created blob
         message = "[TOOL][SAMPREDICTOR][BLOB-CREATED]"
+        kept = self.current_blobs
+        if self.blob_to_correct is None:
+            kept = self.viewerplus.dropSmallRegions(self.current_blobs)
+
         for blob in self.current_blobs:
 
             if self.blob_to_correct is not None:
@@ -623,6 +627,8 @@ class SAMInteractive(Tool):
 
             # order is important: first add then setblob class!
             self.undrawBlob(blob)
+            if not any(blob is k for k in kept):
+                continue
             self.viewerplus.addBlob(blob, selected=True)
             self.blobInfo.emit(blob, message)
 

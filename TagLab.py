@@ -729,6 +729,8 @@ class TagLab(QMainWindow):
         self.settings_widget.general_settings.autosaveInfoChanged[int].connect(self.setAutosave)
         self.settings_widget.general_settings.altNegativeClickChanged[bool].connect(self.viewerplus.setAltClickNegative)
         self.settings_widget.general_settings.altNegativeClickChanged[bool].connect(self.viewerplus2.setAltClickNegative)
+        self.settings_widget.general_settings.minRegionAreaChanged[bool, float].connect(self.viewerplus.setMinRegionArea)
+        self.settings_widget.general_settings.minRegionAreaChanged[bool, float].connect(self.viewerplus2.setMinRegionArea)
 
         self.settings_widget.drawing_settings.borderPenChanged[str, int].connect(self.viewerplus.setBorderPen)
         self.settings_widget.drawing_settings.selectionPenChanged[str, int].connect(self.viewerplus.setSelectionPen)

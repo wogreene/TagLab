@@ -469,17 +469,23 @@ class Ritm(Tool):
                 message = "[TOOL][RITM][BLOB-EDITED]"
                 self.blobInfo.emit(new_blob, message)
             else:
+                kept = self.viewerplus.dropSmallRegions(self.current_blobs)
+
                 for blob in self.current_blobs:
 
                     # undraw preview
                     utils.undrawBlob(blob, self.viewerplus.scene, redraw=False)
+
+                    if not any(blob is k for k in kept):
+                        continue
 
                     # add blob
                     self.viewerplus.addBlob(blob, selected=True)
 
                     self.blobInfo.emit(blob, message)
 
-                self.viewerplus.project.updateCorrespondences("ADD", self.viewerplus.image, self.current_blobs, None, "")
+                if kept:
+                    self.viewerplus.project.updateCorrespondences("ADD", self.viewerplus.image, kept, None, "")
 
         self.viewerplus.saveUndo()
         self.viewerplus.resetSelection()

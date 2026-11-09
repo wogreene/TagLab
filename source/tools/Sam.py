@@ -438,6 +438,8 @@ class Sam(Tool):
             closed_mask = cv2.morphologyEx(mask.astype('uint8')*255, cv2.MORPH_CLOSE, kernel)
             closed_mask = (closed_mask > 0).astype('uint8')
             blob.updateUsingMask(blob.bbox, closed_mask)
+
+        for blob in self.viewerplus.dropSmallRegions(created):
             self.viewerplus.addBlob(blob, selected=True)
 
         self.viewerplus.saveUndo()
