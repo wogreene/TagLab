@@ -26,6 +26,10 @@ from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import QWidget, QColorDialog, QListWidget, QStackedWidget, QComboBox, QSizePolicy, QLineEdit, \
     QLabel, QSpinBox, QCheckBox, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog
 
+# the trackpad problem it works around is a macOS one, so it is on by default there only
+ALT_CLICK_NEGATIVE_DEFAULT = platform.system() == "Darwin"
+
+
 class generalSettingsWidget(QWidget):
 
     researchFieldChanged = pyqtSignal(str)
@@ -85,7 +89,7 @@ class generalSettingsWidget(QWidget):
             "In the positive/negative clicks tools (RITM and SAM interactive), Shift+" + alt_key + "+left click "
             "works like Shift+right click.\nUseful when a quick two-finger click on a trackpad is registered "
             "as a left click.")
-        self.checkbox_alt_negative.setChecked(True)
+        self.checkbox_alt_negative.setChecked(ALT_CLICK_NEGATIVE_DEFAULT)
 
         layout = QVBoxLayout()
         layout.addLayout(layout_H1)
@@ -563,7 +567,7 @@ class QtSettingsWidget(QWidget):
         self.general_settings.setResearchField(self.research_field)
         self.general_settings.setAutosaveInterval(self.autosave_interval)
         self.general_settings.setAltNegativeClick(
-            self.settings.value("alt-click-negative-points", defaultValue=True, type=bool))
+            self.settings.value("alt-click-negative-points", defaultValue=ALT_CLICK_NEGATIVE_DEFAULT, type=bool))
 
         self.drawing_settings.setBorderColor(self.border_pen_color)
         self.drawing_settings.setBorderWidth(self.border_pen_width)

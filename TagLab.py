@@ -244,10 +244,8 @@ class TagLab(QMainWindow):
 
         ##### LAYOUT EDITING TOOLS (VERTICAL)
 
-        # size the tool icons from the usable screen height so that the column takes about 72% of
-        # it (19 buttons + 4 separators): compact on laptops, at most 35 px on large screens
-        avail_height = QApplication.primaryScreen().availableGeometry().height()
-        self.tool_icon_size = max(18, min(35, int(((avail_height - 28) * 0.72 - 76) / 22.4)))
+        screen = QApplication.primaryScreen()
+        self.tool_icon_size = self.toolIconSize(screen.devicePixelRatio(), screen.availableGeometry().height())
 
         flatbuttonstyle = """
         QPushButton:checked { background-color: rgb(100,100,100); }
@@ -920,6 +918,18 @@ class TagLab(QMainWindow):
         action.triggered.connect(callback)
         return action
 
+
+    @staticmethod
+    def toolIconSize(pixel_ratio, available_height):
+        """
+        Size in pixels of the tool icons. The preferred size depends on the pixel density of the screen: 35 on an
+        ordinary one, down to 26 on a retina (2x) one, where small icons are still sharp. It is then reduced only as
+        far as needed for the column (19 buttons and 4 separators) to take no more than 90% of the window height.
+        """
+        ratio = min(max(pixel_ratio, 1.0), 2.0)
+        preferred = 35 - 9 * (ratio - 1.0)
+        fitting = ((available_height - 28) * 0.90 - 76) / 22.4
+        return max(18, int(min(preferred, fitting)))
 
     def applyInitialDockWidths(self):
         # resizeDocks only takes effect once the window is shown; called once at startup

@@ -23,6 +23,7 @@
 
 import math
 import os.path
+import platform
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRectF, QLineF, QFileInfo, QDir, pyqtSlot, pyqtSignal, QT_VERSION_STR
 from PyQt5.QtGui import QPen, QColor, QFont, QBrush, QPolygonF, QPainter, \
     QPainterPath, QFontMetricsF
@@ -306,7 +307,7 @@ class QtImageViewerPlus(QtImageViewer):
 
         # Shift+Alt(Option)+left click as an alternative to Shift+right click for the negative points
         # (a quick two-finger click on a Mac trackpad is often reported as a left click)
-        self.alt_click_negative = True
+        self.alt_click_negative = platform.system() == "Darwin"
 
         self.transparency_value = 0.5
 
