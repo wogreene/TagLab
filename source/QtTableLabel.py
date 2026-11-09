@@ -27,6 +27,7 @@ from pathlib import Path
 import os
 from source.Point import Point
 from source.Image import Image
+from source.ClassCodes import class_codes
 
 path = Path(__file__).parent.absolute()
 imdir = str(path)
@@ -37,6 +38,8 @@ class TableModel(QAbstractTableModel):
     def __init__(self, data):
         super(TableModel, self).__init__()
         self._data = data
+        self.codes = {}
+        self.refreshCodes()
 
         # load icons
         self.icon_eyeopen = self.trimmed(
@@ -48,6 +51,14 @@ class TableModel(QAbstractTableModel):
         self.scaled_eyeopen = None
         self.scaled_eyeclosed = None
         self.setIconSize(self.icon_size)
+
+    def refreshCodes(self):
+        """
+        The class column shows a short code; the class name itself (used for every
+        lookup, for sorting and in the saved project) is left as it is.
+        """
+
+        self.codes = class_codes([str(name) for name in self._data['Class']])
 
     def trimmed(self, pixmap):
         """
@@ -83,15 +94,19 @@ class TableModel(QAbstractTableModel):
     def data(self, index, role):
 
         if role == Qt.TextAlignmentRole:
-             if index.column() > 4:
-                return Qt.AlignRight | Qt.AlignVCenter
-             else:
-                return Qt.AlignCenter
+             # centred like the counts: right-aligned, the coverage ran under the scrollbar and was cut off
+             return Qt.AlignCenter
 
         if role == Qt.BackgroundRole:
             return QColor(40, 40, 40)
 
         value = self._data.iloc[index.row(), index.column()]
+
+        if index.column() == 2:
+            if role == Qt.ToolTipRole:
+                return str(value)
+            if role == Qt.DisplayRole:
+                return self.codes.get(str(value), str(value))
 
         if role == Qt.DecorationRole:
 
@@ -236,11 +251,11 @@ class QtTableLabel(QWidget):
         super(QtTableLabel, self).__init__(parent)
 
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(250)
         self.setMinimumHeight(150)
 
         self.data_table = QTableView()
-        self.data_table.setMinimumWidth(400)
+        self.data_table.setMinimumWidth(250)
         self.data_table.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
         self.data_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -361,16 +376,19 @@ height: 0px;
             self.data_table.setItemDelegateForColumn(0, self.icon_delegate)
             self.data_table.setItemDelegateForColumn(1, self.icon_delegate)
 
-            # the two icons take what they need, and the class name takes the rest
+            # the two icons take what they need
             column(0, QHeaderView.Fixed, self.model.icon_size + padding)   # visibility
             column(1, QHeaderView.Fixed, self.model.icon_size + padding)   # colour
-            header.setSectionResizeMode(2, QHeaderView.Stretch)         # class name
 
-            # sized for the numbers rather than to their contents, but left draggable
-            # so an unusually long coverage figure can still be read in full
-            column(3, QHeaderView.Interactive, metrics.horizontalAdvance("#R") + padding)
-            column(4, QHeaderView.Interactive, metrics.horizontalAdvance("#P") + padding)
-            column(5, QHeaderView.Interactive, metrics.horizontalAdvance("2685.0") + padding)
+            # the class is shown as a four-letter code, so it starts narrow (wide enough
+            # for four capitals or "Empty") and can be dragged wider
+            column(2, QHeaderView.Interactive,
+                   max(metrics.horizontalAdvance("WWWW"), metrics.horizontalAdvance("Empty")) + 2 * padding)
+
+            # the counts and the coverage share all the remaining width
+            header.setSectionResizeMode(3, QHeaderView.Stretch)
+            header.setSectionResizeMode(4, QHeaderView.Stretch)
+            header.setSectionResizeMode(5, QHeaderView.Stretch)
 
             # Update original row order when data changes
             self.original_row_order = list(range(self.model.rowCount(QModelIndex())))
@@ -525,6 +543,7 @@ height: 0px;
         self.model.beginResetModel()
 
         self.model._data = data_table
+        self.model.refreshCodes()
 
         self.sortfilter.endResetModel()
         self.model.endResetModel()
