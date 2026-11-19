@@ -104,6 +104,8 @@ from source.QtGridWidget import QtGridWidget
 from source.QtDictionaryWidget import QtDictionaryWidget
 from source.QtRegionAttributesWidget import QtRegionAttributesWidget
 from source.QtShapefileAttributeWidget import QtAttributeWidget
+from source.RegionTransfer import pixel_shift, copy_regions, find_table, link_regions
+from source.QtImportTimepointDialog import QtImportTimepointDialog
 from source.QtGeometricInfoWidget import QtGeometricInfoWidget
 from source.QtGeometricClusteringWidget import QtGeometricClusteringWidget
 from source.QtCourseAnalysis import QtCourseAnalysis
@@ -1230,6 +1232,10 @@ class TagLab(QMainWindow):
         importShap.setStatusTip("Import a georeferenced shapefile")
         importShap.triggered.connect(self.importShapefile)
 
+        importTimepointAct = QAction("Import Regions From Another Timepoint", self)
+        importTimepointAct.setStatusTip("Copy the regions of another map of the project onto the current one")
+        importTimepointAct.triggered.connect(self.importRegionsFromTimepoint)
+
         ### EXPORT
 
         exportStatsReportAct = QAction("Export Statistics Report (PDF)", self)
@@ -1366,6 +1372,7 @@ class TagLab(QMainWindow):
         self.submenuImport = self.filemenu.addMenu("Import")
         self.submenuImport.addAction(importAct)
         self.submenuImport.addAction(importShap)
+        self.submenuImport.addAction(importTimepointAct)
         self.submenuImport.addAction(appendAct)
         self.filemenu.addSeparator()
         self.submenuExport = self.filemenu.addMenu("Export")
@@ -5355,6 +5362,140 @@ class TagLab(QMainWindow):
         self.activeviewer.saveUndo()
 
         QApplication.restoreOverrideCursor()
+
+    @pyqtSlot()
+    def importRegionsFromTimepoint(self):
+        """
+        Copy the regions of another timepoint (map) of the project onto the one being shown.
+        """
+
+        viewer = self.activeviewer
+        if viewer is None or viewer.image is None:
+            QMessageBox.information(self, self.TAGLAB_VERSION,
+                                    "Open the timepoint you want to copy the regions into, then use this command.")
+            return
+
+        target = viewer.image
+        sources = [image for image in self.project.images
+                   if image is not target and len(image.annotations.seg_blobs) > 0]
+        if len(sources) == 0:
+            QMessageBox.information(self, self.TAGLAB_VERSION, "No other timepoint of this project has regions to copy.")
+            return
+
+        # suggest the latest timepoint that is not after this one
+        default = 0
+        for i, image in enumerate(sources):
+            if image.acquisition_date and target.acquisition_date and image.acquisition_date <= target.acquisition_date:
+                default = i
+
+        items = ["%s  (%s) - %d regions" % (image.name, image.acquisition_date, len(image.annotations.seg_blobs))
+                 for image in sources]
+        settings = self.settings_widget.settings
+        dialog = QtImportTimepointDialog(self, items, default, settings.value("link-copied-regions", defaultValue=True, type=bool))
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        source = sources[dialog.selectedIndex()]
+        link = dialog.linkRegions()
+        settings.setValue("link-copied-regions", link)
+
+        shift = pixel_shift(source, target)
+        if shift is None:
+            answer = QMessageBox.question(
+                self, self.TAGLAB_VERSION,
+                "These two maps do not share a coordinate system: they have a different size or resolution and no "
+                "matching georeferencing.\n\nThe regions would be copied to the same pixel positions, which is right "
+                "only if the maps are already aligned.\n\nCopy them anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+            shift = (0, 0)
+
+        n_existing = len(target.annotations.seg_blobs)
+        if n_existing > 0:
+            answer = QMessageBox.question(
+                self, self.TAGLAB_VERSION,
+                "This map already has %d regions. Add the regions of %s to them?" % (n_existing, source.name),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if answer != QMessageBox.Yes:
+                return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            blobs, outside = copy_regions(source, target, shift)
+
+            # the ids of the source are kept where they are free on this map
+            used = {blob.id for blob in target.annotations.seg_blobs}
+            next_free = 0
+
+            # so are the groups (pieces of one colony), whose keys belong to one map: a key this map already uses for
+            # another group would join the two, and a group reduced to one piece is just a region
+            taken = target.annotations.usedGroups()
+            pieces = {}
+            for blob in blobs:
+                if blob.group is not None:
+                    pieces[blob.group] = pieces.get(blob.group, 0) + 1
+            new_group = {}
+            for blob in blobs:
+                if blob.group is None:
+                    continue
+                if pieces[blob.group] < 2:
+                    blob.group = None
+                    continue
+                if blob.group not in new_group:
+                    key = blob.group
+                    while key in taken:
+                        key += 1
+                    taken.add(key)
+                    new_group[blob.group] = key
+                blob.group = new_group[blob.group]
+
+            viewer.resetSelection()
+            for blob in blobs:
+                if blob.id in used:
+                    while next_free in used:
+                        next_free += 1
+                    blob.setId(next_free)
+                else:
+                    blob.setId(blob.id)
+                used.add(blob.id)
+
+                # the genet depends on the correspondences between timepoints, which these regions do not have yet
+                blob.genet = None
+                viewer.addBlob(blob, selected=False, redraw=False)
+
+            viewer.scene.invalidate()
+            self.project.updateCorrespondences("ADD", target, blobs, None, "")
+            viewer.saveUndo()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        matches = None
+        if link:
+            # the same matching as Compute Automatic Matches, which replaces the matches between these two maps
+            existing = find_table(self.project, source, target)
+            replace = True
+            if existing is not None and not existing.data.empty:
+                replace = QMessageBox.question(
+                    self, self.TAGLAB_VERSION,
+                    "The regions were copied. There are already matches between these two timepoints: replace them with "
+                    "the automatic matches of the copied regions?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+            if replace:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    matches = link_regions(self.project, source, target, blobs)
+                finally:
+                    QApplication.restoreOverrideCursor()
+                self.compare_panel.refreshIfShowing(self.project, self.project.images.index(source),
+                                                    self.project.images.index(target))
+
+        message = "<b>%d regions copied from %s.</b>" % (len(blobs), source.name)
+        if matches is not None:
+            message += " %d matched to their originals." % matches
+        if outside > 0:
+            message += " %d fell outside of this map and were left out." % outside
+        viewer.showMessage(message, 'info', 6000)
+        logfile.info("[IMPORT] %d regions copied from the timepoint %s." % (len(blobs), source.name))
 
     @pyqtSlot()
     def importShapefile(self):

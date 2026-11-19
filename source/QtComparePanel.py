@@ -341,6 +341,14 @@ class QtComparePanel(QWidget):
         viewer = self.sender()
         action = menu.exec_(viewer.mapToGlobal(position))
 
+    def refreshIfShowing(self, project, img1idx, img2idx):
+        """
+        Reload the table if it is the one of the two given images that is being shown (or the same one reversed).
+        """
+        shown = (getattr(self, "img1idx", None), getattr(self, "img2idx", None))
+        if shown in ((img1idx, img2idx), (img2idx, img1idx)):
+            self.setTable(project, shown[0], shown[1])
+
     def setTable(self, project, img1idx, img2idx):
 
         corresp_table = project.getImagePairCorrespondences(img1idx, img2idx)
