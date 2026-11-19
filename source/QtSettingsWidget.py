@@ -128,6 +128,11 @@ class generalSettingsWidget(QWidget):
         self.combo_research_field.currentTextChanged.connect(self.setResearchField)
         self.checkbox_autosave.stateChanged.connect(self.autosaveChanged)
         self.spinbox_autosave_interval.valueChanged.connect(self.autosaveIntervalChanged)
+        # autosave is off until it is ticked: the minutes are not available before that
+        self.lbl_autosave_1.setDisabled(True)
+        self.spinbox_autosave_interval.setDisabled(True)
+        self.lbl_autosave_2.setDisabled(True)
+
         self.checkbox_alt_negative.stateChanged.connect(self.altNegativeChanged)
         self.checkbox_min_region.stateChanged.connect(self.minRegionChanged)
         self.spinbox_min_region.valueChanged.connect(self.minRegionChanged)
@@ -193,15 +198,19 @@ class generalSettingsWidget(QWidget):
             self.lbl_autosave_2.setEnabled(True)
 
             self.settings.setValue("autosave-interval", self.spinbox_autosave_interval.value())
+            self.settings.setValue("autosave-minutes", self.spinbox_autosave_interval.value())
 
             self.autosaveInfoChanged.emit(self.spinbox_autosave_interval.value())
 
     @pyqtSlot(int)
     def autosaveIntervalChanged(self, value):
 
-        self.settings.setValue("autosave-interval", self.spinbox_autosave_interval.value())
+        # the minutes are remembered even while autosave is off; they only take effect when it is on
+        self.settings.setValue("autosave-minutes", value)
 
-        self.autosaveInfoChanged.emit(value)
+        if self.checkbox_autosave.isChecked():
+            self.settings.setValue("autosave-interval", value)
+            self.autosaveInfoChanged.emit(value)
 
     def setResearchField(self, field):
 
@@ -218,27 +227,34 @@ class generalSettingsWidget(QWidget):
 
         return self.comboResearchField.currentText()
 
-    def setAutosaveInterval(self, interval):
+    def setAutosaveInterval(self, interval, minutes=5):
+        """
+        Show the autosave setting that was read from the settings: interval is the minutes of the running autosave
+        (0 when it is off), minutes the interval to offer when it is on. Nothing is written back, since the settings
+        are what is being shown.
+        """
 
-        if interval == 0:
-            self.checkbox_autosave.setChecked(False)
-            self.lbl_autosave_1.setDisabled(True)
-            self.spinbox_autosave_interval.setDisabled(True)
-            self.lbl_autosave_2.setDisabled(True)
-        else:
-            self.checkbox_autosave.setChecked(True)
-            self.lbl_autosave_1.setEnabled(True)
-            self.spinbxo_autosave_interval.setEnabled(True)
-            self.lbl_autosave_2.setEnabled(True)
+        enabled = interval > 0
+        shown = interval if enabled else minutes
+        shown = min(max(shown, self.spinbox_autosave_interval.minimum()), self.spinbox_autosave_interval.maximum())
 
-        self.settings.setValue("autosave-interval", interval)
+        self.checkbox_autosave.blockSignals(True)
+        self.spinbox_autosave_interval.blockSignals(True)
+        self.checkbox_autosave.setChecked(enabled)
+        self.spinbox_autosave_interval.setValue(shown)
+        self.checkbox_autosave.blockSignals(False)
+        self.spinbox_autosave_interval.blockSignals(False)
+
+        self.lbl_autosave_1.setEnabled(enabled)
+        self.spinbox_autosave_interval.setEnabled(enabled)
+        self.lbl_autosave_2.setEnabled(enabled)
 
     def autosaveInterval(self):
 
         if not self.checkbox_autosave.isChecked():
             return 0
         else:
-            return self.edit_autosave_interval.text().toInt()
+            return self.spinbox_autosave_interval.value()
 
 
 class drawingSettingsWidget(QWidget):
@@ -601,7 +617,8 @@ class QtSettingsWidget(QWidget):
     def loadSettings(self):
 
         # 0: autosave is disabled , >0: the project is saved every N seconds
-        self.autosave_interval = self.settings.value("autosave", defaultValue=0, type=int)
+        self.autosave_interval = self.settings.value("autosave-interval", defaultValue=0, type=int)
+        self.autosave_minutes = self.settings.value("autosave-minutes", defaultValue=5, type=int)
         self.research_field = self.settings.value("research-field", defaultValue="Marine Ecology/Biology", type=str)
         self.default_dictionary = self.settings.value("default-dictionary", defaultValue="dictionaries/scripps.json", type=str)
 
@@ -614,7 +631,7 @@ class QtSettingsWidget(QWidget):
         self.label_pen_color = self.settings.value("label-pen-color", defaultValue="255-255-255", type=str)
 
         self.general_settings.setResearchField(self.research_field)
-        self.general_settings.setAutosaveInterval(self.autosave_interval)
+        self.general_settings.setAutosaveInterval(self.autosave_interval, self.autosave_minutes)
         self.general_settings.setAltNegativeClick(
             self.settings.value("alt-click-negative-points", defaultValue=ALT_CLICK_NEGATIVE_DEFAULT, type=bool))
         self.general_settings.setMinRegionArea(

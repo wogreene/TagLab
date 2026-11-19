@@ -782,6 +782,9 @@ class TagLab(QMainWindow):
         # autosave timer
         self.timer = QTimer(self)
 
+        # whether this session wrote the autosave of a project that has never been saved (and so has to remove it)
+        self.untitled_autosave_owned = False
+
         self.updateToolStatus()
 
         self.split_screen_flag = False
@@ -1032,10 +1035,185 @@ class TagLab(QMainWindow):
         else:
             self.timer.stop()
 
+    ### AUTOSAVE
+
+    def untitledAutosavePath(self):
+        """
+        The autosave of a project that has never been saved has no project file to sit beside.
+        """
+        return os.path.join(self.taglab_dir, "autosave", "untitled_autosave.json")
+
+    def absoluteProjectPath(self, filename):
+        """
+        The path of a project file, resolved the way loadProject resolves it.
+        """
+        return os.path.join(self.taglab_dir, QDir(self.taglab_dir).relativeFilePath(filename))
+
+    def autosaveFilename(self):
+        """
+        Where the autosave of the current project goes: beside the project file.
+        """
+        if self.project.filename:
+            return os.path.splitext(self.absoluteProjectPath(self.project.filename))[0] + "_autosave.json"
+        return self.untitledAutosavePath()
+
     @pyqtSlot()
     def autosave(self):
-        filename, file_extension = os.path.splitext(self.project.filename)
-        self.project.save(filename + "_autosave.json")
+        # An exception that escapes from a slot ends the whole program, so a failing autosave is logged instead.
+        try:
+            # With nothing to lose there is nothing to write. It also keeps an unchanged project from leaving an
+            # autosave that looks newer than the file, which would be offered for recovery for no reason.
+            if not self.projectHasUnsavedChanges():
+                return
+
+            filename = self.autosaveFilename()
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            self.project.save(filename, notify=False)
+
+            if not self.project.filename:
+                self.untitled_autosave_owned = True
+
+        except Exception as e:
+            logfile.error("[AUTOSAVE] The autosave failed: " + str(e))
+            print("Autosave failed: " + str(e))
+
+    def removeFile(self, path):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logfile.error("[AUTOSAVE] Could not remove " + path + ": " + str(e))
+
+    def discardAutosave(self):
+        """
+        The autosave of the current project is of no use any more, because the project was saved or its changes were
+        given up: remove it, so that it is not offered for recovery later.
+        """
+        if self.project.filename:
+            self.removeFile(self.autosaveFilename())
+
+        if self.untitled_autosave_owned:
+            self.removeFile(self.untitledAutosavePath())
+            self.untitled_autosave_owned = False
+
+    def isReadableProject(self, path):
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            return isinstance(data, dict) and "images" in data
+        except Exception:
+            return False
+
+    @staticmethod
+    def timeText(timestamp):
+        return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+
+    def askAboutAutosave(self, saved_time, autosave_time):
+        """
+        The autosave of a project is newer than the project file. Returns "autosave" to recover it, "saved" to open the
+        saved project instead (and delete the autosave), or None to cancel.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle(self.TAGLAB_VERSION)
+        box.setIcon(QMessageBox.Question)
+        box.setText("This project has an autosave that is newer than the saved file.")
+        box.setInformativeText("Saved project: %s\nAutosave: %s\n\nThe autosave holds the work that had not been saved "
+                               "when TagLab last stopped." % (self.timeText(saved_time), self.timeText(autosave_time)))
+        recover = box.addButton("Recover the autosave", QMessageBox.AcceptRole)
+        saved = box.addButton("Open the saved project and delete the autosave", QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(recover)
+        box.exec()
+
+        if box.clickedButton() is recover:
+            return "autosave"
+        if box.clickedButton() is saved:
+            return "saved"
+        return None
+
+    def chooseSavedOrAutosave(self, filename):
+        """
+        Which file to open for the project: "autosave" when the work it holds was never saved and the user wants it
+        back, "saved" for the project file itself, or None to cancel opening.
+        """
+        saved = self.absoluteProjectPath(filename)
+        autosave = os.path.splitext(saved)[0] + "_autosave.json"
+
+        try:
+            if not os.path.isfile(autosave) or os.path.getmtime(autosave) <= os.path.getmtime(saved) + 1.0:
+                return "saved"
+            if not self.isReadableProject(autosave):
+                return "saved"
+            saved_time, autosave_time = os.path.getmtime(saved), os.path.getmtime(autosave)
+        except OSError:
+            return "saved"
+
+        choice = self.askAboutAutosave(saved_time, autosave_time)
+        if choice == "saved":
+            self.removeFile(autosave)
+
+        return choice
+
+    def askAboutUntitledAutosave(self, autosave_time):
+        """
+        A project that had never been saved was lost when TagLab stopped. Returns "recover", "discard", or None to
+        decide the next time.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle(self.TAGLAB_VERSION)
+        box.setIcon(QMessageBox.Question)
+        box.setText("TagLab stopped with a project that had never been saved. Recover it?")
+        box.setInformativeText("Autosave of %s" % self.timeText(autosave_time))
+        recover = box.addButton("Recover the project", QMessageBox.AcceptRole)
+        discard = box.addButton("Discard it", QMessageBox.DestructiveRole)
+        box.addButton("Decide later", QMessageBox.RejectRole)
+        box.setDefaultButton(recover)
+        box.exec()
+
+        if box.clickedButton() is recover:
+            return "recover"
+        if box.clickedButton() is discard:
+            return "discard"
+        return None
+
+    @pyqtSlot()
+    def offerUntitledRecovery(self):
+        """
+        At startup: offer the project that was open and never saved when TagLab last stopped.
+        """
+        path = self.untitledAutosavePath()
+        if not os.path.isfile(path) or not self.isReadableProject(path):
+            return
+
+        answer = self.askAboutUntitledAutosave(os.path.getmtime(path))
+        if answer == "discard":
+            self.removeFile(path)
+        elif answer == "recover":
+            self.openRecoveredUntitled(path)
+
+    def openRecoveredUntitled(self, path):
+
+        self.resetAll()
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.project = loadProject(self.taglab_dir, path, self.default_dictionary)
+            # it never had a file, and will be asked for one when it is saved
+            self.project.filename = None
+            self.connectProject()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            box = QMessageBox()
+            box.setWindowTitle('Failed loading the project')
+            box.setText("Could not load the autosave " + path + "\n" + str(e))
+            box.exec()
+            return
+        QApplication.restoreOverrideCursor()
+
+        # from now on this session looks after the autosave
+        self.untitled_autosave_owned = True
+        self.finishLoading(recovered=True)
 
     # call by pressing right button
     def openContextMenu(self, position):
@@ -1113,6 +1291,8 @@ class TagLab(QMainWindow):
         """
 
         if not self.projectHasUnsavedChanges():
+            # it agrees with the file: an autosave of some state in between would only be mistaken for lost work
+            self.discardAutosave()
             return True
 
         if self.project.filename is None:
@@ -1129,6 +1309,10 @@ class TagLab(QMainWindow):
             # saveProject goes through Save As when the project has no name yet, and
             # that can be called off, which leaves the changes still unsaved.
             return not self.projectHasUnsavedChanges()
+
+        if reply == QMessageBox.No:
+            # the changes were given up on purpose: their autosave must not come back as lost work
+            self.discardAutosave()
 
         return reply != QMessageBox.Cancel
 
@@ -6779,23 +6963,44 @@ class TagLab(QMainWindow):
         if not self.offerToSaveChanges():
             return
 
+        # an autosave newer than the project file is work that was never saved
+        choice = self.chooseSavedOrAutosave(filename)
+        if choice is None:
+            return
+
+        source = filename
+        if choice == "autosave":
+            source = os.path.splitext(self.absoluteProjectPath(filename))[0] + "_autosave.json"
+
         self.resetAll()
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         # TODO check if loadProject actually works!
         try:
-            self.project = loadProject(self.taglab_dir, filename, self.default_dictionary)
+            self.project = loadProject(self.taglab_dir, source, self.default_dictionary)
+            if choice == "autosave":
+                # the project as it was, under the name of the file it is saved to
+                self.project.filename = filename
             self.connectProject()
         except Exception as e:
+            QApplication.restoreOverrideCursor()
             box = QMessageBox()
             box.setWindowTitle('Failed loading the project')
-            box.setText("Could not load the file " + filename + "\n" + str(e))
+            box.setText("Could not load the file " + source + "\n" + str(e))
             box.exec()
             return
 
         QApplication.restoreOverrideCursor()
 
-        self.setProjectTitle(self.project.filename)
+        self.finishLoading(recovered=(choice == "autosave"))
+
+    def finishLoading(self, recovered=False):
+        """
+        What follows reading a project: show it. A recovered project is not what is in its file, so it is left as
+        having unsaved changes.
+        """
+
+        self.setProjectTitle(self.project.filename if self.project.filename else "NONE")
 
         self.layers_widget.setProject(self.project)
         self.groupbox_blobpanel.updateRegionAttributes(self.project.region_attributes)
@@ -6808,16 +7013,18 @@ class TagLab(QMainWindow):
 
         self.updateImageSelectionMenu()
 
-        if self.timer is None:
-            self.activateAutosave()
-
-        message = "[PROJECT] The project " + self.project.filename + " has been loaded."
+        message = "[PROJECT] The project " + str(self.project.filename) + (" has been recovered from its autosave."
+                                                                           if recovered else " has been loaded.")
         logfile.info(message)
         self.updateToolStatus()
         self.groupbox_blobpanel.updateDictionary(self.project.labels)
 
-        # freshly read, so it matches the file it came from
-        self.rememberSavedState()
+        if recovered:
+            # unknown rather than equal: whatever is on disk, this is not it
+            self.saved_fingerprint = None
+        else:
+            # freshly read, so it matches the file it came from
+            self.rememberSavedState()
 
 
     def appendProject(self, filename):
@@ -6857,8 +7064,8 @@ class TagLab(QMainWindow):
         self.rememberSavedState()
         QApplication.restoreOverrideCursor()
 
-        if self.timer is None:
-            self.activateAutosave()
+        # everything the autosave held is in the file now
+        self.discardAutosave()
 
         msgBox = QMessageBox()
         msgBox.setWindowTitle(self.TAGLAB_VERSION)
@@ -7225,5 +7432,6 @@ if __name__ == '__main__':
     # Show the viewer and run the application.
     mw.show()
     QTimer.singleShot(0, tool.applyInitialDockWidths)
+    QTimer.singleShot(300, tool.offerUntitledRecovery)
 
     sys.exit(app.exec_())

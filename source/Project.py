@@ -330,10 +330,14 @@ class Project(QObject):
 
         return digest.hexdigest()
 
-    def save(self, filename=None):
+    def save(self, filename=None, notify=True):
+        """
+        Write the project to the given file, or to its own. notify=False is for the autosave, which runs on a timer
+        and must not open a dialog.
+        """
 
         # check inconsistencies. They can be caused by bugs during the regions update/editing
-        if self.correspondences is not None:
+        if notify and self.correspondences is not None:
             for key in self.correspondences.keys():
                 if self.correspondences[key].checkTable() is True:
                     # there are inconsistencies, THIS MUST BE NOTIFIED
@@ -347,9 +351,32 @@ class Project(QObject):
 
         if filename is None:
             filename = self.filename
-        f = open(filename, "w")
-        f.write(str)
-        f.close()
+
+        # Written to a temporary file beside the target and moved into place, so that a crash or a full disk half way
+        # through the write can not leave a truncated project (or autosave) where a good one was.
+        target = os.path.realpath(filename)
+        temporary = target + ".tmp"
+        try:
+            with open(temporary, "w") as f:
+                f.write(str)
+                f.flush()
+                os.fsync(f.fileno())
+
+            if os.path.exists(target):
+                try:
+                    import shutil
+                    shutil.copymode(target, temporary)
+                except OSError:
+                    pass
+
+            os.replace(temporary, target)
+        except BaseException:
+            # nothing half written is left behind, and the file that was there is as it was
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            raise
 
     # def loadDictionary(self, filename):
     #     """
