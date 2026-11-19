@@ -518,6 +518,17 @@ class Project(QObject):
         if sort:
             self.orderImagesByAcquisitionDate()
 
+    def releaseMaps(self):
+        """
+        Free the decoded maps of every image of the project. Used when another project takes its place: a large map is
+        decoded into memory or into a scratch file on disk and stays there for as long as its channel does, so the
+        maps of a project that is no longer open would otherwise stay until TagLab is closed.
+        """
+
+        for image in self.images:
+            for channel in image.channels:
+                channel.release()
+
     def deleteImage(self, image):
         self.images = [i for i in self.images if i != image]
         self.correspondences = {key: corr for key, corr in self.correspondences.items() if

@@ -106,6 +106,20 @@ class Channel(object):
         self._buffer_file = handle
         return buffer
 
+    def release(self):
+        """
+        Drop the decoded pixels of the channel, and with them the scratch file behind them. The channel keeps what it
+        needs to decode them again, which loadData does if the channel is ever needed once more.
+
+        A QImage keeps the buffer it was made on alive for as long as it lives, so this frees the memory (or the disk
+        space of the scratch file) only once nothing else displays this channel: a viewer has to be cleared first.
+        """
+
+        self.qimage = None
+        self.float_map = None
+        self._pixel_buffer = None
+        self.releaseBufferFile()
+
     def releaseBufferFile(self):
         """
         Close the scratch file, which is what removes it from disk.

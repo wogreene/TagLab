@@ -2892,6 +2892,10 @@ class TagLab(QMainWindow):
 
         self.viewerplus.hideScalebar()
 
+        # the viewers have let go of the maps, so those of the project being replaced can go too (the maps of the
+        # project that is open are all kept, to switch between its timepoints quickly)
+        self.project.releaseMaps()
+
         # RE-INITIALIZATION
 
         self.help_widget = None
