@@ -5679,7 +5679,7 @@ class TagLab(QMainWindow):
         if output_filename:
             blobs = self.activeviewer.annotations.seg_blobs
             gf = self.activeviewer.image.georef_filename
-            rasterops.write_shapefile(self.project, self.activeviewer.image, blobs, gf, output_filename)
+            rasterops.write_annotations_as_shapefile(self.project, self.activeviewer.image, blobs, gf, output_filename)
 
             msgBox = QMessageBox(self)
             msgBox.setWindowTitle(self.TAGLAB_VERSION)
