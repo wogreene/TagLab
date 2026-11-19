@@ -68,6 +68,7 @@ import csv
 import source.Mask as Mask
 import source.RasterOps as rasterops
 from source.ScrollBarStyle import ScrollBarStyler
+from source.QtToastMessage import ToastDismisser
 from source.QtImageViewerPlus import QtImageViewerPlus
 from source.QtMapViewer import QtMapViewer
 from source.QtSettingsWidget import QtSettingsWidget
@@ -7348,6 +7349,16 @@ if __name__ == '__main__':
     # every scrollbar in the app gets the same look (including those of dialogs created later)
     scrollbar_styler = ScrollBarStyler(app)
     app.installEventFilter(scrollbar_styler)
+
+    def removeApplicationFilters():
+        # Qt goes on delivering events to an application-wide filter while the program shuts down, by which time
+        # Python is already taking its side apart: that crashed the program at quit (and, being a crash, made the
+        # Automator launcher report an error). They come off while everything is still intact.
+        app.removeEventFilter(scrollbar_styler)
+        if ToastDismisser.instance is not None:
+            app.removeEventFilter(ToastDismisser.instance)
+
+    app.aboutToQuit.connect(removeApplicationFilters)
 
     TAGLAB_PATH = os.path.dirname(__file__)
     PATH_ICONS = os.path.join(TAGLAB_PATH, "icons")

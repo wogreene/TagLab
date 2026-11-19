@@ -1055,8 +1055,8 @@ class QtImageViewerPlus(QtImageViewer):
 
         # if it has just been created remove the current graphics item in order to set it again
         if blob.qpath_gitem is not None:
-            self.scene.removeItem(blob.qpath_gitem)
-            self.scene.removeItem(blob.id_item)
+            self.removeFromScene(blob.qpath_gitem)
+            self.removeFromScene(blob.id_item)
             del blob.qpath_gitem
             del blob.id_item
             blob.qpath_gitem = None
@@ -1092,8 +1092,9 @@ class QtImageViewerPlus(QtImageViewer):
 
     def undrawBlob(self, blob, redraw=True):
 
-        self.scene.removeItem(blob.qpath_gitem)
-        self.scene.removeItem(blob.id_item)
+        # a region that was never drawn, or is undrawn twice, has nothing to remove
+        self.removeFromScene(blob.qpath_gitem)
+        self.removeFromScene(blob.id_item)
         blob.qpath = None
         blob.qpath_gitem = None
         blob.id_item = None

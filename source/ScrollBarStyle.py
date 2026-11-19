@@ -45,17 +45,19 @@ class ScrollBarStyler(QObject):
     """
     Application-wide event filter: every scrollbar is styled when it is first polished, so the
     ones created later (dialogs, panels opened on demand) match the rest.
-    """
 
-    def __init__(self, parent=None):
-        super(ScrollBarStyler, self).__init__(parent)
-        self.base_style = QStyleFactory.create("Fusion")
+    Each scrollbar gets a style object of its own, owned by the scrollbar. A widget does not own its style, so a
+    style shared by all of them (and owned by this filter, hence by the application) was destroyed with the
+    application before the scrollbars that used it, which crashed the program when it was closed.
+    """
 
     def eventFilter(self, obj, event):
 
         if event.type() == QEvent.Polish and isinstance(obj, QScrollBar) and not obj.property("tagLabScrollBar"):
             obj.setProperty("tagLabScrollBar", True)
-            obj.setStyle(self.base_style)
+            style = QStyleFactory.create("Fusion")
+            style.setParent(obj)
+            obj.setStyle(style)
             obj.setStyleSheet(SCROLLBAR_STYLESHEET)
 
         return False

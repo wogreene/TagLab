@@ -1,5 +1,62 @@
-from PyQt5.QtCore import Qt, QTimer, QEvent
+from PyQt5.QtCore import Qt, QTimer, QEvent, QObject
 from PyQt5.QtWidgets import QLabel, QApplication
+
+
+class ToastDismisser(QObject):
+    """
+    The single application-wide event filter that takes the warnings down when the user does something else. It is
+    created once and owned by the application, and the warnings only register with it while they are on screen.
+    (A filter installed and removed by each warning, and living in the warning, could be called after the warning was
+    destroyed, which crashed the program when it was closed with a warning still up.)
+    """
+
+    instance = None
+
+    @classmethod
+    def get(cls):
+        if cls.instance is None:
+            app = QApplication.instance()
+            cls.instance = cls(app)
+            app.installEventFilter(cls.instance)
+        return cls.instance
+
+    def __init__(self, parent):
+        super(ToastDismisser, self).__init__(parent)
+        self.toasts = []
+
+    def add(self, toast):
+        if toast not in self.toasts:
+            self.toasts.append(toast)
+
+    def remove(self, toast):
+        if toast in self.toasts:
+            self.toasts.remove(toast)
+
+    def eventFilter(self, obj, event):
+
+        if not self.toasts:
+            return False
+
+        t = event.type()
+
+        if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick, QEvent.KeyPress, QEvent.Wheel):
+            for toast in list(self.toasts):
+                try:
+                    toast.dismiss()
+                except RuntimeError:
+                    # the warning has been destroyed: nothing left to take down
+                    self.remove(toast)
+
+        elif t in (QEvent.Move, QEvent.Resize, QEvent.WindowStateChange):
+            for toast in list(self.toasts):
+                try:
+                    if obj is toast.viewer.window():
+                        toast.dismiss()
+                except RuntimeError:
+                    # the viewer is already gone
+                    self.remove(toast)
+
+        return False
 
 
 class QtToastMessage(QLabel):
@@ -35,26 +92,12 @@ class QtToastMessage(QLabel):
         self.show()
         self.raise_()
 
-        # installing it twice is harmless: Qt ignores a filter that is already installed
-        QApplication.instance().installEventFilter(self)
+        ToastDismisser.get().add(self)
         self.timer.start(timeout)
 
     def dismiss(self):
 
         self.timer.stop()
         self.hide()
-        app = QApplication.instance()
-        if app is not None:
-            app.removeEventFilter(self)
-
-    def eventFilter(self, obj, event):
-
-        t = event.type()
-
-        if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick, QEvent.KeyPress, QEvent.Wheel):
-            self.dismiss()
-
-        elif t in (QEvent.Move, QEvent.Resize, QEvent.WindowStateChange) and obj is self.viewer.window():
-            self.dismiss()
-
-        return False
+        if ToastDismisser.instance is not None:
+            ToastDismisser.instance.remove(self)
