@@ -2532,6 +2532,13 @@ class TagLab(QMainWindow):
             self.comboboxTargetImage.show()
             self.viewerplus.viewChanged()
 
+            # A viewer that is hidden ignores setTool, so a tool chosen while split screen was off never reached the
+            # second one, which was left on Pan: clicks on it did nothing. It takes the tool in use now it is shown
+            # (the two selection tools are set on one viewer on purpose, and are left alone).
+            tool_in_use = self.viewerplus.tools.tool
+            if tool_in_use not in ("SELECTPOINTS", "SELECTAREA") and self.viewerplus2.tools.tool != tool_in_use:
+                self.viewerplus2.setTool(tool_in_use)
+
             try:
                 self.viewerplus2.viewUpdated[QRectF].connect(self.mapviewer.drawOverlayImage, type=Qt.UniqueConnection)
             except:
