@@ -34,7 +34,7 @@ class QtHelpWidget(QWidget):
 
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
         self.setMinimumWidth(440)
-        self.setMinimumHeight(440)
+        # no fixed minimum height: the window takes the height its rows need (a fixed one squashed them)
         self.setAutoFillBackground(False)
 
 
@@ -115,6 +115,8 @@ class QtHelpWidget(QWidget):
         self.gridlayout4.addWidget(QLabel("Toggle Boundaries"), 7, 0)
         self.gridlayout4.addWidget(QLabel("Toggle Ids"), 8, 0)
         self.gridlayout4.addWidget(QLabel("Toggle Grid"), 9, 0)
+        self.gridlayout4.addWidget(QLabel("Group Regions"), 10, 0)
+        self.gridlayout4.addWidget(QLabel("Ungroup Regions"), 11, 0)
         self.gridlayout4.addWidget(QLabel("<b>Click</b>"), 0, 1)
         self.gridlayout4.addWidget(QLabel("<b>Click + Shift</b>"), 1, 1)
         self.gridlayout4.addWidget(QLabel("<b>SPACE</b>"), 2, 1)
@@ -124,7 +126,9 @@ class QtHelpWidget(QWidget):
         self.gridlayout4.addWidget(QLabel("<b>Q</b>"), 6, 1)
         self.gridlayout4.addWidget(QLabel("<b>W</b>"), 7, 1)
         self.gridlayout4.addWidget(QLabel("<b>E</b>"), 8, 1)
-        self.gridlayout4.addWidget(QLabel("<b>G</b>"), 9, 1)
+        self.gridlayout4.addWidget(QLabel("<b>Ctrl+G</b>"), 9, 1)
+        self.gridlayout4.addWidget(QLabel("<b>G</b>"), 10, 1)
+        self.gridlayout4.addWidget(QLabel("<b>Shift+G</b>"), 11, 1)
 
         self.groupbox_commands.setLayout(self.gridlayout4)
 
