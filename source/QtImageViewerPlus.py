@@ -242,6 +242,9 @@ class QtImageViewerPlus(QtImageViewer):
         self.toolsMessagePanel = QtToolMessagePanel(self)
         self.toolsMessagePanel.hide()
 
+        # whether the grid is switched on (the Grid checkbox of the main window); a new image follows it
+        self.grid_wanted = False
+
         # short-lived warning over the viewer, and the minimum area for the regions made with the tools
         self.warningToast = QtToastMessage(self)
         self.min_region_enabled = True
@@ -386,8 +389,12 @@ class QtImageViewerPlus(QtImageViewer):
         # draw the sampling areas (if any)
         self.drawSamplingAreas()
 
-        # draw the grid (if defined)
-        self.showGrid()
+        # draw the grid (if defined), unless the grid is switched off: setting an image used to show it whatever the
+        # Grid checkbox said, so it came back whenever split screen was turned off
+        if self.grid_wanted:
+            self.showGrid()
+        else:
+            self.hideGrid()
 
         self.scene.invalidate()
         self.px_to_mm = image.pixelSize()
@@ -658,6 +665,8 @@ class QtImageViewerPlus(QtImageViewer):
 
     @pyqtSlot(int)
     def toggleGrid(self, check):
+
+        self.grid_wanted = check != 0
 
         if check == 0:
             self.hideGrid()
